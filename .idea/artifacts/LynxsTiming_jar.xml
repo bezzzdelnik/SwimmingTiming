@@ -1,0 +1,9 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="LynxsTiming:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/LynxsTiming_jar</output-path>
+    <root id="archive" name="LynxsTiming.jar">
+      <element id="module-output" name="SwimmingTiming" />
+      <element id="extracted-dir" path="$PROJECT_DIR$/src/lib/jssc-2.9.4.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>
