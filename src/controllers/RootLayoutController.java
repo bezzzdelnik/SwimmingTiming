@@ -5,7 +5,6 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.geometry.HPos;
-import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.GridPane;
 import javafx.stage.FileChooser;
@@ -14,6 +13,7 @@ import jssc.SerialPort;
 import jssc.SerialPortEvent;
 import jssc.SerialPortEventListener;
 import jssc.SerialPortException;
+import model.Participant;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -63,6 +63,8 @@ public class RootLayoutController {
     private ToggleGroup distanceGroup = new ToggleGroup();
     private int distance = 50;
 
+    private ObservableList<Participant> participants = FXCollections.observableArrayList();
+
 
     private final ObservableList<String> parityList = FXCollections.observableArrayList("None", "Odd", "Even", "Mark", "Space");
     private final ObservableList<String> flowControlList = FXCollections.observableArrayList("None", "XON/XOFF", "RTS/CST");
@@ -81,6 +83,7 @@ public class RootLayoutController {
 
     @FXML
     private void initialize() {
+
         radio25m.setToggleGroup(swimPool);
         radio50m.setToggleGroup(swimPool);
         radio50Distance.setToggleGroup(distanceGroup);
@@ -100,63 +103,13 @@ public class RootLayoutController {
 
         speedComboBox.getSelectionModel().selectedItemProperty().addListener(
                 (observable, oldValue, newValue) -> {
-                    if (newValue.equals("110")) {
-                        serialSpeed = 110;
-                    }
-                    if (newValue.equals("300")) {
-                        serialSpeed = 300;
-                    }
-                    if (newValue.equals("1200")) {
-                        serialSpeed = 1200;
-                    }
-                    if (newValue.equals("2400")) {
-                        serialSpeed = 2400;
-                    }
-                    if (newValue.equals("4800")) {
-                        serialSpeed = 4800;
-                    }
-                    if (newValue.equals("9600")) {
-                        serialSpeed = 9600;
-                    }
-                    if (newValue.equals("14400")) {
-                        serialSpeed = 14400;
-                    }
-                    if (newValue.equals("19200")) {
-                        serialSpeed = 19200;
-                    }
-                    if (newValue.equals("38400")) {
-                        serialSpeed = 38400;
-                    }
-                    if (newValue.equals("57600")) {
-                        serialSpeed = 57600;
-                    }
-                    if (newValue.equals("115200")) {
-                        serialSpeed = 115200;
-                    }
-                    if (newValue.equals("128000")) {
-                        serialSpeed = 128000;
-                    }
-                    if (newValue.equals("256000")) {
-                        serialSpeed = 256000;
-                    }
+                    serialSpeed = Integer.parseInt(newValue);
                 });
-
 
 
         dataBitsComboBox.getSelectionModel().selectedItemProperty().addListener(
                 (observable, oldValue, newValue) -> {
-                    if (newValue.equals("5")) {
-                        serialDataBits = 5;
-                    }
-                    if (newValue.equals("6")) {
-                        serialDataBits = 6;
-                    }
-                    if (newValue.equals("7")) {
-                        serialDataBits = 7;
-                    }
-                    if (newValue.equals("8")) {
-                        serialDataBits = 8;
-                    }
+                    serialDataBits = Integer.parseInt(newValue);
                 });
 
         stopBitsComboBox.getSelectionModel().selectedItemProperty().addListener(
@@ -275,6 +228,7 @@ public class RootLayoutController {
     }
 
     @FXML private void setDistance(){
+
         if (radio50Distance.isSelected()) {
             distance = 50;
             createGridPaneSplits();
@@ -302,25 +256,35 @@ public class RootLayoutController {
     }
 
     private void createGridPaneSplits() {
+        participants.clear();
         GridPane splits = new GridPane();
         int columns = distance / swimPoolSize;
-
+        Label nameLabel = new Label("Имя");
+        GridPane.setHalignment(nameLabel, HPos.CENTER);
+        splits.add(nameLabel, 0, 0);
         for (int column = 1; column < (columns + 1); column++) {
             Label newDistanceLabel = new Label(column * swimPoolSize + "м");
             GridPane.setHalignment(newDistanceLabel, HPos.CENTER);
             splits.add(newDistanceLabel, column, 0);
         }
         for (int row = 1; row < 11; row++) {
-            Label newNameLabel = new Label("Имя " + row);
+            Participant newParticipant = new Participant();
+            newParticipant.setName(row + " " + "Имя ФАМИЛИЯ");
+            participants.add(newParticipant);
+            Label newNameLabel = new Label(newParticipant.getName());
             newNameLabel.setPrefWidth(200);
             splits.add(newNameLabel, 0, row);
             for (int column = 1; column < (columns + 1); column++) {
-                TextField newTextField = new TextField(column + " " + row);
+                participants.get(row - 1).getSplits().add(column + " " + row);
+                TextField newTextField = new TextField(participants.get(row - 1).getSplits().get(column - 1));
                 newTextField.setPrefWidth(70);
                 splits.add(newTextField, column, row);
             }
         }
         scrollPaneSplits.setContent(splits);
+        for (int i = 0; i < participants.size(); i++){
+            System.out.println(participants.get(i).getName());
+        }
     }
 
 
