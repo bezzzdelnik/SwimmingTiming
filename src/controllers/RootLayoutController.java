@@ -4,6 +4,8 @@ import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
+import javafx.geometry.HPos;
+import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.GridPane;
 import javafx.stage.FileChooser;
@@ -54,8 +56,12 @@ public class RootLayoutController {
     @FXML private ScrollPane scrollPaneSplits;
 
     @FXML private RadioButton radio25m, radio50m;
+    @FXML private RadioButton radio50Distance, radio100Distance, radio200Distance, radio400Distance, radio800Distance, radio1500Distance;
 
     private ToggleGroup swimPool = new ToggleGroup();
+    private int swimPoolSize = 50;
+    private ToggleGroup distanceGroup = new ToggleGroup();
+    private int distance = 50;
 
 
     private final ObservableList<String> parityList = FXCollections.observableArrayList("None", "Odd", "Even", "Mark", "Space");
@@ -77,6 +83,13 @@ public class RootLayoutController {
     private void initialize() {
         radio25m.setToggleGroup(swimPool);
         radio50m.setToggleGroup(swimPool);
+        radio50Distance.setToggleGroup(distanceGroup);
+        radio100Distance.setToggleGroup(distanceGroup);
+        radio200Distance.setToggleGroup(distanceGroup);
+        radio400Distance.setToggleGroup(distanceGroup);
+        radio800Distance.setToggleGroup(distanceGroup);
+        radio1500Distance.setToggleGroup(distanceGroup);
+
         speedComboBox.setItems(speedList);
         dataBitsComboBox.setItems(dataBitsList);
         stopBitsComboBox.setItems(stopBits);
@@ -127,6 +140,8 @@ public class RootLayoutController {
                         serialSpeed = 256000;
                     }
                 });
+
+
 
         dataBitsComboBox.getSelectionModel().selectedItemProperty().addListener(
                 (observable, oldValue, newValue) -> {
@@ -195,17 +210,7 @@ public class RootLayoutController {
         createGridPaneSplits();
     }
 
-    private void createGridPaneSplits() {
-        GridPane splits = new GridPane();
-        for (int cell = 0; cell < 61; cell++) {
-            for (int row = 0; row < 12; row++) {
-                TextField newTextField = new TextField(cell + " " + row);
-                //GridPane.setConstraints(newTextField, cell, row);
-                splits.add(newTextField, cell, row);
-            }
-        }
-        scrollPaneSplits.setContent(splits);
-    }
+
 
     @FXML
     private void handleSaveAs() {
@@ -256,6 +261,68 @@ public class RootLayoutController {
         }
 
     }
+
+//ОБРАБОТКА ДАННЫХ
+    @FXML private void setSwimPoolSize(){
+        if (radio25m.isSelected()) {
+            swimPoolSize = 25;
+            createGridPaneSplits();
+        }
+        if (radio50m.isSelected()) {
+            swimPoolSize = 50;
+            createGridPaneSplits();
+        }
+    }
+
+    @FXML private void setDistance(){
+        if (radio50Distance.isSelected()) {
+            distance = 50;
+            createGridPaneSplits();
+        }
+        if (radio100Distance.isSelected()) {
+            distance = 100;
+            createGridPaneSplits();
+        }
+        if (radio200Distance.isSelected()) {
+            distance = 200;
+            createGridPaneSplits();
+        }
+        if (radio400Distance.isSelected()) {
+            distance = 400;
+            createGridPaneSplits();
+        }
+        if (radio800Distance.isSelected()) {
+            distance = 800;
+            createGridPaneSplits();
+        }
+        if (radio1500Distance.isSelected()) {
+            distance = 1500;
+            createGridPaneSplits();
+        }
+    }
+
+    private void createGridPaneSplits() {
+        GridPane splits = new GridPane();
+        int columns = distance / swimPoolSize;
+
+        for (int column = 1; column < (columns + 1); column++) {
+            Label newDistanceLabel = new Label(column * swimPoolSize + "м");
+            GridPane.setHalignment(newDistanceLabel, HPos.CENTER);
+            splits.add(newDistanceLabel, column, 0);
+        }
+        for (int row = 1; row < 11; row++) {
+            Label newNameLabel = new Label("Имя " + row);
+            newNameLabel.setPrefWidth(200);
+            splits.add(newNameLabel, 0, row);
+            for (int column = 1; column < (columns + 1); column++) {
+                TextField newTextField = new TextField(column + " " + row);
+                newTextField.setPrefWidth(70);
+                splits.add(newTextField, column, row);
+            }
+        }
+        scrollPaneSplits.setContent(splits);
+    }
+
 
     private static class PortReader implements SerialPortEventListener {
         TextArea logArea;

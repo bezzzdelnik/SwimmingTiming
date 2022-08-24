@@ -28,10 +28,10 @@ public class MainApp extends Application {
             rootLayout = loader.load();
 
             // Отображаем сцену, содержащую корневой макет.
-            Scene scene = new Scene(rootLayout, 400, 300);
+            Scene scene = new Scene(rootLayout, 1920, 600);
             primaryStage.setScene(scene);
-            primaryStage.minHeightProperty().set(300);
-            primaryStage.minWidthProperty().set(400);
+            primaryStage.minHeightProperty().set(600);
+            primaryStage.minWidthProperty().set(1920);
             primaryStage.maxHeightProperty().set(1080);
             primaryStage.maxWidthProperty().set(1920);
             //primaryStage.getIcons().add(new Image("avt/caspar/client/icons/icons.png")) ;

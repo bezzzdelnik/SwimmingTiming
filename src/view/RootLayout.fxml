@@ -68,19 +68,19 @@
                         <HBox spacing="10.0">
                            <children>
                               <Label text="Бассейн" />
-                              <RadioButton fx:id="radio25m" mnemonicParsing="false" text="25м" />
-                              <RadioButton fx:id="radio50m" mnemonicParsing="false" selected="true" text="50м" />
+                              <RadioButton fx:id="radio25m" mnemonicParsing="false" onAction="#setSwimPoolSize" text="25м" />
+                              <RadioButton fx:id="radio50m" mnemonicParsing="false" onAction="#setSwimPoolSize" selected="true" text="50м" />
                            </children>
                         </HBox>
                         <HBox spacing="10.0">
                            <children>
                               <Label text="Дистанция" />
-                              <RadioButton fx:id="radio25m1" mnemonicParsing="false" selected="true" text="50" />
-                              <RadioButton fx:id="radio50m1" mnemonicParsing="false" text="100" />
-                              <RadioButton fx:id="radio25m11" mnemonicParsing="false" text="200" />
-                              <RadioButton fx:id="radio50m11" mnemonicParsing="false" text="400" />
-                              <RadioButton fx:id="radio25m12" mnemonicParsing="false" text="800" />
-                              <RadioButton fx:id="radio50m12" mnemonicParsing="false" text="1500" />
+                              <RadioButton fx:id="radio50Distance" mnemonicParsing="false" onAction="#setDistance" selected="true" text="50" />
+                              <RadioButton fx:id="radio100Distance" mnemonicParsing="false" onAction="#setDistance" text="100" />
+                              <RadioButton fx:id="radio200Distance" mnemonicParsing="false" onAction="#setDistance" text="200" />
+                              <RadioButton fx:id="radio400Distance" mnemonicParsing="false" onAction="#setDistance" text="400" />
+                              <RadioButton fx:id="radio800Distance" mnemonicParsing="false" onAction="#setDistance" text="800" />
+                              <RadioButton fx:id="radio1500Distance" mnemonicParsing="false" onAction="#setDistance" text="1500" />
                            </children>
                         </HBox>
                         <HBox alignment="CENTER_LEFT" spacing="30.0">
