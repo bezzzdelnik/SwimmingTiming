@@ -247,14 +247,17 @@ public class RootLayoutController {
 
     public void createGridPaneSplits() {
         splits = new GridPane();
+        splits.setHgap(10);
         participants.clear();
 
         int columns = distance / swimPoolSize;
         Label nameLabel = new Label("Имя");
+        Label laneLabel = new Label("Дорожка");
         GridPane.setHalignment(nameLabel, HPos.CENTER);
-        splits.add(nameLabel, 0, 0);
-        for (int column = 1; column < (columns + 1); column++) {
-            Label newDistanceLabel = new Label(column * swimPoolSize + "м");
+        splits.add(nameLabel, 1, 0);
+        splits.add(laneLabel, 0, 0);
+        for (int column = 2; column < (columns + 2); column++) {
+            Label newDistanceLabel = new Label((column - 1) * swimPoolSize + "м");
             GridPane.setHalignment(newDistanceLabel, HPos.CENTER);
             splits.add(newDistanceLabel, column, 0);
         }
@@ -266,17 +269,22 @@ public class RootLayoutController {
             newParticipant.nameProperty().addListener((observable, oldValue, newValue) ->
                     newNameLabel.setText(newValue));
             newNameLabel.setPrefWidth(200);
-            splits.add(newNameLabel, 0, row);
-            for (int column = 1; column < (columns + 1); column++) {
+            splits.add(newNameLabel, 1, row);
+            Label laneLbl = new Label();
+            laneLbl.setStyle("-fx-font-weight: bold");
+            GridPane.setHalignment(laneLbl, HPos.CENTER);
+            laneLbl.setText(String.valueOf(row - 1));
+            splits.add(laneLbl, 0, row);
+            for (int column = 2; column < (columns + 2); column++) {
                 TextField newTextField = new TextField();
                 newTextField.setPrefWidth(70);
                 int finalRow = row;
                 int finalColumn = column;
-                participants.get(finalRow - 1).getSplits().add((finalColumn - 1), new Split());
-                newTextField.setText(participants.get(finalRow - 1).getSplits().get((finalColumn - 1)).getSpl());
+                participants.get(finalRow - 1).getSplits().add((finalColumn - 2), new Split());
+                newTextField.setText(participants.get(finalRow - 1).getSplits().get((finalColumn - 2)).getSpl());
                 newTextField.textProperty().addListener((observable, oldValue, newValue) ->
-                        participants.get(finalRow - 1).getSplits().get(finalColumn - 1).setSpl(newValue));
-                participants.get(finalRow - 1).getSplits().get(finalColumn - 1).splProperty().addListener(
+                        participants.get(finalRow - 1).getSplits().get(finalColumn - 2).setSpl(newValue));
+                participants.get(finalRow - 1).getSplits().get(finalColumn - 2).splProperty().addListener(
                         (observable, oldValue, newValue) -> {
                             if (oldValue.equals("")) {
                                 newTextField.setText(newValue);

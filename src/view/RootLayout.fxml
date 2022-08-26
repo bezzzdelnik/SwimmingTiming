@@ -96,7 +96,7 @@
                               <Insets bottom="10.0" top="10.0" />
                            </padding>
                         </HBox>
-                        <ScrollPane fx:id="scrollPaneSplits" fitToHeight="true" minHeight="350.0" />
+                        <ScrollPane fx:id="scrollPaneSplits" fitToHeight="true" maxWidth="5000.0" minHeight="350.0" prefHeight="350.0" prefWidth="1324.0" />
                         <Button mnemonicParsing="false" onAction="#ShowParticipantSize" text="Button" />
                      </children>
                   </VBox>
