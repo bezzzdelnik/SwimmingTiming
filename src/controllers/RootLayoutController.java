@@ -280,7 +280,10 @@ public class RootLayoutController {
                         (observable, oldValue, newValue) -> {
                             if (oldValue.equals("")) {
                                 newTextField.setText(newValue);
-                                participants.get(finalRow - 1).setSplitCount(participants.get(finalRow - 1).getSplitCount()+1);
+                                if (participants.get(finalRow - 1).getSplitCount() < participants.get(finalRow - 1).getSplits().size() - 1) {
+                                    participants.get(finalRow - 1).setSplitCount(participants.get(finalRow - 1).getSplitCount()+1);
+                                }
+
                             }
 
                         });

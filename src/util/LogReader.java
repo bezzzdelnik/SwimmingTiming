@@ -102,7 +102,7 @@ public class LogReader {
                 }
             }
            try {
-                Thread.sleep(100);
+                Thread.sleep(10);
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
@@ -146,12 +146,16 @@ public class LogReader {
                 String time = output.split("\\s+")[3];
                 String place = output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", "");
                 int splitCount = participants.get(lane).getSplitCount();
+                System.out.println(participants.get(lane).getSplits().size() + " SPLIT SIZE");
 
                 if (participants.get(lane).getSplits().get(splitCount).getSpl().equals("")) {
                     participants.get(lane).getSplits().get(splitCount).setSpl(time);
+
                     if (splitCount < participants.get(lane).getSplits().size() - 1) {
                         participants.get(lane).setSplitCount(splitCount+1);
-                    } else if(splitCount == participants.get(lane).getSplits().size() - 1){
+
+                    }
+                    if(splitCount == participants.get(lane).getSplits().size() - 1){
                         new Thread(() -> Platform.runLater(() ->
                                 participants.get(lane).setName(place + " " + participants.get(lane).getName()))).start();
 
