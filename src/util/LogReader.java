@@ -107,7 +107,7 @@ public class LogReader {
     public void readTimer(String output) {
         if (output.contains("SOHDC4R02STXBS1")) {
             String tmp = output.split("\\s+")[2];
-            timerLabel.setText(tmp);
+            new Thread(() -> Platform.runLater(() -> timerLabel.setText(tmp))).start();
             System.out.println(tmp);
         }
 
