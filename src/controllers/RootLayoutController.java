@@ -14,6 +14,7 @@ import jssc.SerialPortEvent;
 import jssc.SerialPortEventListener;
 import jssc.SerialPortException;
 import model.Participant;
+import util.LogReader;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -58,6 +59,8 @@ public class RootLayoutController {
     @FXML private RadioButton radio25m, radio50m;
     @FXML private RadioButton radio50Distance, radio100Distance, radio200Distance, radio400Distance, radio800Distance, radio1500Distance;
 
+    @FXML private Label timerLabel;
+
     private ToggleGroup swimPool = new ToggleGroup();
     private int swimPoolSize = 50;
     private ToggleGroup distanceGroup = new ToggleGroup();
@@ -81,6 +84,8 @@ public class RootLayoutController {
     private int serialFlowControl1 = 1;
     private int serialFlowControl2 = 2;
 
+    LogReader logReader = new LogReader();
+
     @FXML
     private void initialize() {
 
@@ -102,15 +107,11 @@ public class RootLayoutController {
         portField.textProperty().addListener((observable, oldValue, newValue) -> serialPortName = newValue);
 
         speedComboBox.getSelectionModel().selectedItemProperty().addListener(
-                (observable, oldValue, newValue) -> {
-                    serialSpeed = Integer.parseInt(newValue);
-                });
+                (observable, oldValue, newValue) -> serialSpeed = Integer.parseInt(newValue));
 
 
         dataBitsComboBox.getSelectionModel().selectedItemProperty().addListener(
-                (observable, oldValue, newValue) -> {
-                    serialDataBits = Integer.parseInt(newValue);
-                });
+                (observable, oldValue, newValue) -> serialDataBits = Integer.parseInt(newValue));
 
         stopBitsComboBox.getSelectionModel().selectedItemProperty().addListener(
                 (observable, oldValue, newValue) -> {
@@ -159,6 +160,13 @@ public class RootLayoutController {
                         serialFlowControl2 = 8;
                     }
                 });
+        distanceGroup.selectedToggleProperty().addListener((observable, oldValue, newValue) -> {
+            RadioButton selectedBtn = (RadioButton) newValue;
+            setDistance(selectedBtn);
+        });
+
+
+
 
         createGridPaneSplits();
     }
@@ -168,12 +176,12 @@ public class RootLayoutController {
     @FXML
     private void handleSaveAs() {
         FileChooser fileChooser = new FileChooser();
-        // Р—Р°РґР°С‘Рј С„РёР»СЊС‚СЂ СЂР°СЃС€РёСЂРµРЅРёР№
+        // Задаём фильтр расширений
         FileChooser.ExtensionFilter extFilter = new FileChooser.ExtensionFilter(
                 "XML files (*.xml)", "*.xml");
         fileChooser.getExtensionFilters().add(extFilter);
 
-        // РџРѕРєР°Р·С‹РІР°РµРј РґРёР°Р»РѕРі СЃРѕС…СЂР°РЅРµРЅРёСЏ С„Р°Р№Р»Р°
+        // Показываем диалог сохранения файла
         File file = fileChooser.showSaveDialog(primaryStage);
         fileNameField.setText(file.getPath());
     }
@@ -182,21 +190,21 @@ public class RootLayoutController {
     private void startSerial() {
         serialPort = new SerialPort(serialPortName);
         try {
-            //РћС‚РєСЂС‹РІР°РµРј РїРѕСЂС‚
+            //Открываем порт
             serialPort.openPort();
-            //Р’С‹СЃС‚Р°РІР»СЏРµРј РїР°СЂР°РјРµС‚СЂС‹
+            //Выставляем параметры
             serialPort.setParams(serialSpeed,
                     serialDataBits,
                     serialStopBits,
                     serialParity);
-            //Р’РєР»СЋС‡Р°РµРј Р°РїРїР°СЂР°С‚РЅРѕРµ СѓРїСЂР°РІР»РµРЅРёРµ РїРѕС‚РѕРєРѕРј
+            //Включаем аппаратное управление потоком
             serialPort.setFlowControlMode(serialFlowControl1 |
                     serialFlowControl2);
-            //РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј РёРІРµРЅС‚ Р»РёСЃРµРЅРµСЂ Рё РјР°СЃРєСѓ
+            //Устанавливаем ивент лисенер и маску
             if (!fileNameField.getText().isEmpty()) {
                 serialPort.addEventListener(new PortReader(logArea, fileNameField.getText()), SerialPort.MASK_RXCHAR);
             }
-            //РћС‚РїСЂР°РІР»СЏРµРј Р·Р°РїСЂРѕСЃ СѓСЃС‚СЂРѕР№СЃС‚РІСѓ
+            //Отправляем запрос устройству
         }
         catch (SerialPortException ex) {
             ex.printStackTrace();
@@ -215,7 +223,7 @@ public class RootLayoutController {
 
     }
 
-//РћР‘Р РђР‘РћРўРљРђ Р”РђРќРќР«РҐ
+//ОБРАБОТКА ДАННЫХ
     @FXML private void setSwimPoolSize(){
         if (radio25m.isSelected()) {
             swimPoolSize = 25;
@@ -227,64 +235,56 @@ public class RootLayoutController {
         }
     }
 
-    @FXML private void setDistance(){
+    private void setDistance(RadioButton selectedBtn){
 
-        if (radio50Distance.isSelected()) {
-            distance = 50;
-            createGridPaneSplits();
-        }
-        if (radio100Distance.isSelected()) {
-            distance = 100;
-            createGridPaneSplits();
-        }
-        if (radio200Distance.isSelected()) {
-            distance = 200;
-            createGridPaneSplits();
-        }
-        if (radio400Distance.isSelected()) {
-            distance = 400;
-            createGridPaneSplits();
-        }
-        if (radio800Distance.isSelected()) {
-            distance = 800;
-            createGridPaneSplits();
-        }
-        if (radio1500Distance.isSelected()) {
-            distance = 1500;
-            createGridPaneSplits();
-        }
+        distance = Integer.parseInt(selectedBtn.getText());
+        createGridPaneSplits();
+
     }
 
     private void createGridPaneSplits() {
         participants.clear();
         GridPane splits = new GridPane();
         int columns = distance / swimPoolSize;
-        Label nameLabel = new Label("РРјСЏ");
+        Label nameLabel = new Label("Имя");
         GridPane.setHalignment(nameLabel, HPos.CENTER);
         splits.add(nameLabel, 0, 0);
         for (int column = 1; column < (columns + 1); column++) {
-            Label newDistanceLabel = new Label(column * swimPoolSize + "Рј");
+            Label newDistanceLabel = new Label(column * swimPoolSize + "м");
             GridPane.setHalignment(newDistanceLabel, HPos.CENTER);
             splits.add(newDistanceLabel, column, 0);
         }
         for (int row = 1; row < 11; row++) {
             Participant newParticipant = new Participant();
-            newParticipant.setName(row + " " + "РРјСЏ Р¤РђРњРР›РРЇ");
+            newParticipant.setName(row + " " + "Имя ФАМИЛИЯ");
             participants.add(newParticipant);
             Label newNameLabel = new Label(newParticipant.getName());
             newNameLabel.setPrefWidth(200);
             splits.add(newNameLabel, 0, row);
             for (int column = 1; column < (columns + 1); column++) {
-                participants.get(row - 1).getSplits().add(column + " " + row);
-                TextField newTextField = new TextField(participants.get(row - 1).getSplits().get(column - 1));
+                TextField newTextField = new TextField();
                 newTextField.setPrefWidth(70);
+                int finalRow = row;
+                int finalColumn = column;
+                participants.get(finalRow - 1).getSplits().add((finalColumn - 1), "0");
+                newTextField.setText(participants.get(finalRow - 1).getSplits().get((finalColumn - 1)));
+                newTextField.textProperty().addListener((observable, oldValue, newValue) ->
+                        participants.get(finalRow - 1).getSplits().set((finalColumn - 1), newValue));
                 splits.add(newTextField, column, row);
+
             }
         }
         scrollPaneSplits.setContent(splits);
-        for (int i = 0; i < participants.size(); i++){
-            System.out.println(participants.get(i).getName());
-        }
+    }
+
+    //test button
+    public void ShowParticipantSize() {
+        //timerLabel.setText("Dfdfd");
+        logReader.setTimerLabel(timerLabel);
+
+        new Thread(() -> Platform.runLater(() -> logReader.readeFile())).start();
+        //logReader.setText();
+        //System.out.println(participants.get(0).getSplits().get(0));
     }
 
 
@@ -314,15 +314,7 @@ public class RootLayoutController {
 
 
 
-                    new Thread(new Runnable() {
-                        @Override public void run() {
-                            Platform.runLater(new Runnable() {
-                                @Override public void run() {
-                                    logArea.setText(data);
-                                }
-                            });
-                        }
-                    }).start();
+                    new Thread(() -> Platform.runLater(() -> logArea.setText(data))).start();
 
 
                     BufferedWriter out = new BufferedWriter(new FileWriter(filePath));
