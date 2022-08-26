@@ -1,8 +1,13 @@
 package util;
 
+import controllers.RootLayoutController;
 import javafx.application.Platform;
+import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
+import javafx.scene.Group;
 import javafx.scene.control.Label;
+import javafx.scene.layout.GridPane;
+import model.Participant;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -17,15 +22,20 @@ public class LogReader {
     private static String bf;
 
     private Label timerLabel;
+    private GridPane splits;
+    private ObservableList<Participant> participants;
+    private RootLayoutController rootLayoutController;
 
-    public void setTimerLabel(Label timerLabel) {
+    public LogReader(Label timerLabel, GridPane splits, ObservableList<Participant> participants, RootLayoutController rootLayoutController) {
         this.timerLabel = timerLabel;
+        this.splits = splits;
+        this.participants = participants;
+        this.rootLayoutController = rootLayoutController;
     }
 
     public void readeFile() {
 
         File file = new File("src/util/puttySwimmingFull.log");
-        //BufferedReader in = new BufferedReader(new InputStreamReader(new FileInputStream(file), "Cp1251"));
 
         try (FileInputStream fis = new FileInputStream(file)) {
 
@@ -91,31 +101,40 @@ public class LogReader {
 
                 }
             }
-            try {
+           try {
                 Thread.sleep(100);
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
             readTimer(output);
+            readStartList(output);
+            readSplits(output);
             //System.out.println(output);
         }
     }
-    public void setText() {
-        timerLabel.setText("fdfdfdfd");
-    }
+
 
     public void readTimer(String output) {
         if (output.contains("SOHDC4R02STXBS1")) {
             String tmp = output.split("\\s+")[2];
             new Thread(() -> Platform.runLater(() -> timerLabel.setText(tmp))).start();
-            System.out.println(tmp);
+            //System.out.println(tmp);
         }
 
     }
 
     public void readStartList(String output) {
+        if (output.contains("SOH98STXSTARTEOT")) {
+            new Thread(() -> Platform.runLater(() -> rootLayoutController.createGridPaneSplits())).start();
+
+        }
+
         if (output.contains("SOH98STXSLH")) {
-            System.out.println(output.replaceAll("\\||EOT", "").split("\\s+", 5)[4]);
+            new Thread(() -> Platform.runLater(() -> {
+                participants.get(Integer.parseInt(output.replaceAll("\\|", "").split("\\s+")[2])).
+                        setName(output.replaceAll("\\||EOT", "").split("\\s+", 5)[4]);
+            })).start();
+            //System.out.println(output.replaceAll("\\||EOT", "").split("\\s+", 5)[4]);
         }
 
     }
@@ -123,8 +142,26 @@ public class LogReader {
     public void readSplits(String output) {
         if (output.contains("SOHDC4S02STXBS")) {
             if (output.split("\\s+").length == 5) {
-                System.out.println("Place - " + output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", "") + " " +
-                        "Lane - " + output.split("\\s+")[2] + " " + "Time - " + output.split("\\s+")[3]);
+                int lane = Integer.parseInt(output.split("\\s+")[2]);
+                String time = output.split("\\s+")[3];
+                String place = output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", "");
+                int splitCount = participants.get(lane).getSplitCount();
+
+                if (participants.get(lane).getSplits().get(splitCount).getSpl().equals("")) {
+                    participants.get(lane).getSplits().get(splitCount).setSpl(time);
+                    if (splitCount < participants.get(lane).getSplits().size() - 1) {
+                        participants.get(lane).setSplitCount(splitCount+1);
+                    } else if(splitCount == participants.get(lane).getSplits().size() - 1){
+                        new Thread(() -> Platform.runLater(() ->
+                                participants.get(lane).setName(place + " " + participants.get(lane).getName()))).start();
+
+                    }
+                    System.out.println(participants.get(lane).getSplitCount());
+                }
+
+
+                System.out.println("Place - " + place + " " +"Lane - " + lane + " " + "Time - " + time);
+
             }
 
         }

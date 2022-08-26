@@ -14,6 +14,7 @@ import jssc.SerialPortEvent;
 import jssc.SerialPortEventListener;
 import jssc.SerialPortException;
 import model.Participant;
+import model.Split;
 import util.LogReader;
 
 import java.io.BufferedWriter;
@@ -60,6 +61,7 @@ public class RootLayoutController {
     @FXML private RadioButton radio50Distance, radio100Distance, radio200Distance, radio400Distance, radio800Distance, radio1500Distance;
 
     @FXML private Label timerLabel;
+    private GridPane splits = new GridPane();
 
     private ToggleGroup swimPool = new ToggleGroup();
     private int swimPoolSize = 50;
@@ -84,7 +86,8 @@ public class RootLayoutController {
     private int serialFlowControl1 = 1;
     private int serialFlowControl2 = 2;
 
-    LogReader logReader = new LogReader();
+
+
 
     @FXML
     private void initialize() {
@@ -242,9 +245,10 @@ public class RootLayoutController {
 
     }
 
-    private void createGridPaneSplits() {
+    public void createGridPaneSplits() {
+        splits = new GridPane();
         participants.clear();
-        GridPane splits = new GridPane();
+
         int columns = distance / swimPoolSize;
         Label nameLabel = new Label("Èìÿ");
         GridPane.setHalignment(nameLabel, HPos.CENTER);
@@ -259,6 +263,8 @@ public class RootLayoutController {
             newParticipant.setName(row + " " + "Èìÿ ÔÀÌÈËÈß");
             participants.add(newParticipant);
             Label newNameLabel = new Label(newParticipant.getName());
+            newParticipant.nameProperty().addListener((observable, oldValue, newValue) ->
+                    newNameLabel.setText(newValue));
             newNameLabel.setPrefWidth(200);
             splits.add(newNameLabel, 0, row);
             for (int column = 1; column < (columns + 1); column++) {
@@ -266,10 +272,18 @@ public class RootLayoutController {
                 newTextField.setPrefWidth(70);
                 int finalRow = row;
                 int finalColumn = column;
-                participants.get(finalRow - 1).getSplits().add((finalColumn - 1), "0");
-                newTextField.setText(participants.get(finalRow - 1).getSplits().get((finalColumn - 1)));
+                participants.get(finalRow - 1).getSplits().add((finalColumn - 1), new Split());
+                newTextField.setText(participants.get(finalRow - 1).getSplits().get((finalColumn - 1)).getSpl());
                 newTextField.textProperty().addListener((observable, oldValue, newValue) ->
-                        participants.get(finalRow - 1).getSplits().set((finalColumn - 1), newValue));
+                        participants.get(finalRow - 1).getSplits().get(finalColumn - 1).setSpl(newValue));
+                participants.get(finalRow - 1).getSplits().get(finalColumn - 1).splProperty().addListener(
+                        (observable, oldValue, newValue) -> {
+                            if (oldValue.equals("")) {
+                                newTextField.setText(newValue);
+                                participants.get(finalRow - 1).setSplitCount(participants.get(finalRow - 1).getSplitCount()+1);
+                            }
+
+                        });
                 splits.add(newTextField, column, row);
 
             }
@@ -278,13 +292,21 @@ public class RootLayoutController {
     }
 
     //test button
-    public void ShowParticipantSize() {
-        //timerLabel.setText("Dfdfd");
-        logReader.setTimerLabel(timerLabel);
+    private boolean isTaskRunning = false;
 
-        new Thread(() -> Platform.runLater(() -> logReader.readeFile())).start();
-        //logReader.setText();
-        //System.out.println(participants.get(0).getSplits().get(0));
+    public void ShowParticipantSize() {
+        splits = new GridPane();
+        createGridPaneSplits();
+
+        Runnable task = () -> {
+            LogReader logReader = new LogReader(timerLabel, splits, participants, this);
+            logReader.readeFile();
+        };
+        Thread thread = new Thread(task);
+        if (!isTaskRunning) {
+            isTaskRunning = true;
+            thread.start();
+        }
     }
 
 
