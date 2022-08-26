@@ -61,6 +61,8 @@ public class RootLayoutController {
 
     @FXML private Label timerLabel;
 
+    private GridPane splits = new GridPane();
+
     private ToggleGroup swimPool = new ToggleGroup();
     private int swimPoolSize = 50;
     private ToggleGroup distanceGroup = new ToggleGroup();
@@ -84,7 +86,7 @@ public class RootLayoutController {
     private int serialFlowControl1 = 1;
     private int serialFlowControl2 = 2;
 
-    LogReader logReader = new LogReader();
+
 
     @FXML
     private void initialize() {
@@ -244,7 +246,7 @@ public class RootLayoutController {
 
     private void createGridPaneSplits() {
         participants.clear();
-        GridPane splits = new GridPane();
+
         int columns = distance / swimPoolSize;
         Label nameLabel = new Label("Èìÿ");
         GridPane.setHalignment(nameLabel, HPos.CENTER);
@@ -259,6 +261,7 @@ public class RootLayoutController {
             newParticipant.setName(row + " " + "Èìÿ ÔÀÌÈËÈß");
             participants.add(newParticipant);
             Label newNameLabel = new Label(newParticipant.getName());
+            newParticipant.nameProperty().addListener((observable, oldValue, newValue) -> newNameLabel.setText(newValue));
             newNameLabel.setPrefWidth(200);
             splits.add(newNameLabel, 0, row);
             for (int column = 1; column < (columns + 1); column++) {
@@ -278,11 +281,24 @@ public class RootLayoutController {
     }
 
     //test button
-    public void ShowParticipantSize() {
-        //timerLabel.setText("Dfdfd");
-        logReader.setTimerLabel(timerLabel);
 
-        new Thread(() -> Platform.runLater(() -> logReader.readeFile())).start();
+    private boolean isThreadRunning = false;
+    public void ShowParticipantSize() {
+        Runnable task = () -> {
+            LogReader logReader = new LogReader(timerLabel, splits, participants);
+            logReader.readeFile();
+        };
+        Thread thread = new Thread(task);
+        if (!isThreadRunning) {
+            thread.start();
+            isThreadRunning = true;
+        } else {
+
+        }
+
+
+
+
         //logReader.setText();
         //System.out.println(participants.get(0).getSplits().get(0));
     }

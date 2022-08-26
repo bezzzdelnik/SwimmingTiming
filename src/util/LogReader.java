@@ -1,14 +1,23 @@
 package util;
 
 import javafx.application.Platform;
-import javafx.fxml.FXML;
+import javafx.collections.ObservableList;
 import javafx.scene.control.Label;
+import javafx.scene.layout.GridPane;
+import model.Participant;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 
 public class LogReader {
+
+    public LogReader (Label timerLabel, GridPane splits, ObservableList<Participant> participants) {
+        this.timerLabel = timerLabel;
+        this.splits = splits;
+        this.participants = participants;
+    }
+
     static String STX = "\u0002";
     static String EOT = "\u0004";
     static String SOH = "\u0001";
@@ -17,10 +26,8 @@ public class LogReader {
     private static String bf;
 
     private Label timerLabel;
-
-    public void setTimerLabel(Label timerLabel) {
-        this.timerLabel = timerLabel;
-    }
+    private GridPane splits;
+    private ObservableList<Participant> participants;
 
     public void readeFile() {
 
@@ -94,9 +101,10 @@ public class LogReader {
             try {
                 Thread.sleep(100);
             } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                e.printStackTrace();
             }
             readTimer(output);
+            readStartList(output);
             //System.out.println(output);
         }
     }
@@ -107,7 +115,7 @@ public class LogReader {
     public void readTimer(String output) {
         if (output.contains("SOHDC4R02STXBS1")) {
             String tmp = output.split("\\s+")[2];
-            timerLabel.setText(tmp);
+            new Thread(() -> Platform.runLater(() -> timerLabel.setText(tmp))).start();
             System.out.println(tmp);
         }
 
@@ -115,7 +123,13 @@ public class LogReader {
 
     public void readStartList(String output) {
         if (output.contains("SOH98STXSLH")) {
-            System.out.println(output.replaceAll("\\||EOT", "").split("\\s+", 5)[4]);
+            for (int i = 0; i < participants.size(); i++) {
+                int finalI = i;
+                new Thread(() -> Platform.runLater(() ->
+                        participants.get(Integer.parseInt(output.replaceAll("\\||EOT", "").split("\\s+")[2])).
+                        setName(output.replaceAll("\\||EOT", "").split("\\s+", 5)[4]))).start();
+            }
+            System.out.println(output);
         }
 
     }
