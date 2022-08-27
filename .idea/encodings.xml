@@ -2,7 +2,7 @@
 <project version="4">
   <component name="Encoding">
     <file url="file://$PROJECT_DIR$/src/controllers/RootLayoutController.java" charset="windows-1251" />
-    <file url="file://$PROJECT_DIR$/src/util/LogReader.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/util/DataReader.java" charset="UTF-8" />
     <file url="PROJECT" charset="windows-1251" />
   </component>
 </project>

@@ -15,7 +15,7 @@ import jssc.SerialPortEventListener;
 import jssc.SerialPortException;
 import model.Participant;
 import model.Split;
-import util.LogReader;
+import util.DataReader;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -29,6 +29,8 @@ public class RootLayoutController {
     }
 
     private static SerialPort serialPort;
+
+
 
 
     @FXML
@@ -60,7 +62,7 @@ public class RootLayoutController {
     @FXML private RadioButton radio25m, radio50m;
     @FXML private RadioButton radio50Distance, radio100Distance, radio200Distance, radio400Distance, radio800Distance, radio1500Distance;
 
-    @FXML private Label timerLabel;
+    @FXML public Label timerLabel;
     private GridPane splits = new GridPane();
 
     private ToggleGroup swimPool = new ToggleGroup();
@@ -70,6 +72,8 @@ public class RootLayoutController {
 
     private ObservableList<Participant> participants = FXCollections.observableArrayList();
 
+    private DataReader dataReader = new DataReader(participants, this);
+
 
     private final ObservableList<String> parityList = FXCollections.observableArrayList("None", "Odd", "Even", "Mark", "Space");
     private final ObservableList<String> flowControlList = FXCollections.observableArrayList("None", "XON/XOFF", "RTS/CST");
@@ -78,7 +82,7 @@ public class RootLayoutController {
     private final ObservableList<String> dataBitsList = FXCollections.observableArrayList("5", "6", "7", "8");
     private final ObservableList<String> stopBits = FXCollections.observableArrayList("1", "2", "1.5");
 
-    private String serialPortName = "COM1";
+    private String serialPortName = "COM2";
     private int serialSpeed = 9600;
     private int serialDataBits = 8;
     private int serialStopBits = 1;
@@ -205,7 +209,7 @@ public class RootLayoutController {
                     serialFlowControl2);
             //Устанавливаем ивент лисенер и маску
             if (!fileNameField.getText().isEmpty()) {
-                serialPort.addEventListener(new PortReader(logArea, fileNameField.getText()), SerialPort.MASK_RXCHAR);
+                serialPort.addEventListener(new PortReader(logArea, fileNameField.getText(), this), SerialPort.MASK_RXCHAR);
             }
             //Отправляем запрос устройству
         }
@@ -302,40 +306,25 @@ public class RootLayoutController {
         scrollPaneSplits.setContent(splits);
     }
 
-    //test button
-    private boolean isTaskRunning = false;
 
-    public void ShowParticipantSize() {
-        splits = new GridPane();
-        createGridPaneSplits();
-
-        Runnable task = () -> {
-            LogReader logReader = new LogReader(timerLabel, splits, participants, this);
-            logReader.readeFile();
-        };
-        Thread thread = new Thread(task);
-        if (!isTaskRunning) {
-            isTaskRunning = true;
-            thread.start();
-        }
-    }
-
-
-    private static class PortReader implements SerialPortEventListener {
+    private class PortReader implements SerialPortEventListener {
         TextArea logArea;
         String filePath;
+        RootLayoutController rootLayoutController;
 
-        public PortReader(TextArea logArea, String filePath) {
+
+        public PortReader(TextArea logArea, String filePath, RootLayoutController rootLayoutController) {
             this.logArea = logArea;
             this.filePath = filePath;
-
+            this.rootLayoutController = rootLayoutController;
         }
 
         public void serialEvent(SerialPortEvent event) {
+
             if(event.isRXCHAR() && event.getEventValue() > 0){
                 try {
                     String data = serialPort.readString(event.getEventValue());
-                    System.out.println(data);
+
                     String val;
                     if (data.contains(" 01 ") || data.contains(" 02 ") || data.contains(" 03 ") || data.contains(" 04 ") ||
                             data.contains(" 05 ") || data.contains(" 06 ") || data.contains(" 07 ") || data.contains(" 08 ") ||
@@ -347,7 +336,9 @@ public class RootLayoutController {
 
 
 
+
                     new Thread(() -> Platform.runLater(() -> logArea.setText(data))).start();
+                    new Thread(() -> Platform.runLater(() -> dataReader.readeFile(data))).start();
 
 
                     BufferedWriter out = new BufferedWriter(new FileWriter(filePath));
@@ -359,6 +350,7 @@ public class RootLayoutController {
                 }
             }
         }
+
     }
 
 }

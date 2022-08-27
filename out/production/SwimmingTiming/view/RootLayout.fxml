@@ -53,7 +53,7 @@
                         <Button fx:id="setFileNameButton" mnemonicParsing="false" onAction="#handleSaveAs" text="Set file name" GridPane.rowIndex="6" />
                         <Button fx:id="startSerialButton" mnemonicParsing="false" onAction="#startSerial" text="Start Serial" GridPane.rowIndex="8" />
                         <Button fx:id="stopSerialButton" mnemonicParsing="false" onAction="#stopSerial" text="Stop Serial" GridPane.columnIndex="1" GridPane.rowIndex="8" />
-                        <TextField fx:id="fileNameField" GridPane.columnIndex="1" GridPane.rowIndex="6" />
+                        <TextField fx:id="fileNameField" text="D:\test1.xml" GridPane.columnIndex="1" GridPane.rowIndex="6" />
                         <ComboBox fx:id="speedComboBox" prefWidth="150.0" promptText="9600" GridPane.columnIndex="1" GridPane.rowIndex="1" />
                         <ComboBox fx:id="dataBitsComboBox" prefWidth="150.0" promptText="8" GridPane.columnIndex="1" GridPane.rowIndex="2" />
                         <ComboBox fx:id="stopBitsComboBox" prefWidth="150.0" promptText="1" GridPane.columnIndex="1" GridPane.rowIndex="3" />
@@ -97,7 +97,7 @@
                            </padding>
                         </HBox>
                         <ScrollPane fx:id="scrollPaneSplits" fitToHeight="true" maxWidth="5000.0" minHeight="350.0" prefHeight="350.0" prefWidth="1324.0" />
-                        <Button mnemonicParsing="false" onAction="#ShowParticipantSize" text="Button" />
+                        <Button mnemonicParsing="false" text="Button" />
                      </children>
                   </VBox>
                   <TextArea fx:id="logArea" layoutY="240.0" prefHeight="50.0" AnchorPane.bottomAnchor="10.0" AnchorPane.leftAnchor="10.0" AnchorPane.rightAnchor="10.0" />
