@@ -6,6 +6,8 @@ import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.geometry.HPos;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.GridPane;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
@@ -17,10 +19,7 @@ import model.Participant;
 import model.Split;
 import util.DataReader;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
+import java.io.*;
 
 public class RootLayoutController {
     private Stage primaryStage;
@@ -59,10 +58,19 @@ public class RootLayoutController {
 
     @FXML private ScrollPane scrollPaneSplits;
 
+    @FXML private Button startSerialButton, stopSerialButton;
+
     @FXML private RadioButton radio25m, radio50m;
     @FXML private RadioButton radio50Distance, radio100Distance, radio200Distance, radio400Distance, radio800Distance, radio1500Distance;
 
     @FXML public Label timerLabel;
+    @FXML private Label connectionLabel;
+
+    @FXML private ImageView connectionImageView;
+
+    private File discon = new File("src/pic/disconnected.png");
+    private File con = new File("src/pic/connected.png");
+
     private GridPane splits = new GridPane();
 
     private ToggleGroup swimPool = new ToggleGroup();
@@ -82,7 +90,7 @@ public class RootLayoutController {
     private final ObservableList<String> dataBitsList = FXCollections.observableArrayList("5", "6", "7", "8");
     private final ObservableList<String> stopBits = FXCollections.observableArrayList("1", "2", "1.5");
 
-    private String serialPortName = "COM2";
+    private String serialPortName = "COM1";
     private int serialSpeed = 9600;
     private int serialDataBits = 8;
     private int serialStopBits = 1;
@@ -95,6 +103,7 @@ public class RootLayoutController {
 
     @FXML
     private void initialize() {
+        connectionImageView.setImage(new Image(discon.toURI().toString()));
 
         radio25m.setToggleGroup(swimPool);
         radio50m.setToggleGroup(swimPool);
@@ -212,10 +221,21 @@ public class RootLayoutController {
                 serialPort.addEventListener(new PortReader(logArea, fileNameField.getText(), this), SerialPort.MASK_RXCHAR);
             }
             //Отправляем запрос устройству
+            if (serialPort.isOpened()) {
+                connectionImageView.setImage(new Image(con.toURI().toString()));
+                connectionLabel.setText("Connected");
+                startSerialButton.setDisable(true);
+                stopSerialButton.setDisable(false);
+            }
         }
         catch (SerialPortException ex) {
             ex.printStackTrace();
+            connectionLabel.setText(ex.getExceptionType());
         }
+    }
+
+    public void closeApp() {
+        stopSerial();
     }
 
     @FXML
@@ -223,6 +243,13 @@ public class RootLayoutController {
         try {
             if (serialPort.isOpened()) {
                 serialPort.closePort();
+                if (!serialPort.isOpened()) {
+                    stopSerialButton.setDisable(true);
+                    startSerialButton.setDisable(false);
+                    connectionLabel.setText("Disconnected");
+                    connectionImageView.setImage(new Image(discon.toURI().toString()));
+                }
+
             }
         } catch (SerialPortException e) {
             e.printStackTrace();

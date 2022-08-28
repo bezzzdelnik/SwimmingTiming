@@ -10,6 +10,7 @@ import java.io.*;
 public class MainApp extends Application {
     private Stage primaryStage;
     private BorderPane rootLayout;
+    private RootLayoutController controller;
 
     @Override
     public void start(Stage primaryStage) throws Exception {
@@ -36,7 +37,7 @@ public class MainApp extends Application {
             primaryStage.maxWidthProperty().set(1920);
             //primaryStage.getIcons().add(new Image("avt/caspar/client/icons/icons.png")) ;
             // Даём контроллеру доступ к главному прилодению.
-            RootLayoutController controller = loader.getController();
+            controller = loader.getController();
             controller.setPrimaryStage(primaryStage);
             primaryStage.show();
 
@@ -48,6 +49,15 @@ public class MainApp extends Application {
 
     public Stage getPrimaryStage() {
         return primaryStage;
+    }
+
+    @Override
+
+    public void stop(){
+        controller.closeApp();
+        System.exit(0);
+        //Здесь Вы можете прописать все действия при закрытии Вашего приложения.
+
     }
 
     public static void main(String[] args) {

@@ -70,11 +70,9 @@ public class DataReader {
 
                 }
             }
-            //Thread.sleep(10);
             readTimer(output);
             readStartList(output);
             readSplits(output);
-            //System.out.println(output);
         }
     }
 
@@ -83,7 +81,6 @@ public class DataReader {
         if (output.contains("SOHDC4R02STXBS1")) {
             String tmp = output.split("\\s+")[2];
             new Thread(() -> Platform.runLater(() -> rootLayoutController.timerLabel.setText(tmp))).start();
-            System.out.println(tmp);
         }
 
     }
@@ -91,7 +88,6 @@ public class DataReader {
     public void readStartList(String output) {
         if (output.contains("SOH98STXSTARTEOT")) {
             new Thread(() -> Platform.runLater(() -> rootLayoutController.createGridPaneSplits())).start();
-            System.out.println("Reset");
         }
 
         if (output.contains("SOH98STXSLH")) {
@@ -99,7 +95,6 @@ public class DataReader {
                 participants.get(Integer.parseInt(output.replaceAll("\\|", "").split("\\s+")[2])).
                         setName(output.replaceAll("\\||EOT", "").split("\\s+", 5)[4]);
             })).start();
-            //System.out.println(output.replaceAll("\\||EOT", "").split("\\s+", 5)[4]);
         }
 
     }
@@ -111,7 +106,6 @@ public class DataReader {
                 String time = output.split("\\s+")[3];
                 String place = output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", "");
                 int splitCount = participants.get(lane).getSplitCount();
-                //System.out.println(participants.get(lane).getSplits().size() + " SPLIT SIZE");
 
                 if (participants.get(lane).getSplits().get(splitCount).getSpl().equals("")) {
                     participants.get(lane).getSplits().get(splitCount).setSpl(time);
@@ -125,7 +119,6 @@ public class DataReader {
                                 participants.get(lane).setName(place + " " + participants.get(lane).getName()))).start();
 
                     }
-                    //System.out.println(participants.get(lane).getSplitCount());
                 }
 
 
