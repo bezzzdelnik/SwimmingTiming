@@ -1,8 +1,57 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="Encoding">
+  <component name="Encoding" addBOMForNewFiles="with BOM">
+    <file url="file://$PROJECT_DIR$/META-INF" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/controllers" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/lib" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/model" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/pic" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/src" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/src/consoles/CommandConsumer.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/consoles/CommandsMap.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/consoles/Console.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/consoles/ConsolePrinter.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/controllers/OradController.java" charset="windows-1251" />
     <file url="file://$PROJECT_DIR$/src/controllers/RootLayoutController.java" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/src/orad/AbstractREConnectionController.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/IREConnectionController.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/IREConnectionModel.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/IREConnectionModelListener.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/IScenesModel.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/IScenesModelListener.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/OradSceneStatusListener.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/OradScenesList.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/Scene.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/SceneController.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/ScenesModel.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/ScenesModelController.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/console/CommandPrompt.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2Command.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandAcivateScene.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandAnimationControll.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandCanvasActivateScene.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandCanvasLoadScene.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandCanvasUnloadScene.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandDeactivateSlot.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandDecoder.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandEncoder.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandGetActiveScenes.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandGetCanvases.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandGetLoadedScenes.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandHello.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandLoadScene.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandSetCanvas.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandSetExport.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2CommandUnloadScene.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2ConnectionController.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2ConnectionInputParser.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2Settings.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/util/CommonUtils.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/util/Constants.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/util/DataReader.java" charset="UTF-8" />
-    <file url="PROJECT" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/src/util/MessageBuilder.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/util" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/util/DataReader.java" charset="UTF-8" />
+    <file url="PROJECT" charset="UTF-8" />
   </component>
 </project>

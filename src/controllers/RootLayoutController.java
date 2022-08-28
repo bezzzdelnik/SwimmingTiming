@@ -8,6 +8,7 @@ import javafx.geometry.HPos;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.GridPane;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
@@ -17,6 +18,7 @@ import jssc.SerialPortEventListener;
 import jssc.SerialPortException;
 import model.Participant;
 import model.Split;
+import orad.retalk2.Retalk2ConnectionController;
 import util.DataReader;
 
 import java.io.*;
@@ -29,7 +31,7 @@ public class RootLayoutController {
 
     private static SerialPort serialPort;
 
-
+    private Retalk2ConnectionController controller;
 
 
     @FXML
@@ -68,6 +70,10 @@ public class RootLayoutController {
 
     @FXML private ImageView connectionImageView;
 
+    @FXML private AnchorPane oradControllerAnchorPane;
+
+    private OradController oradConnectionController;
+
     private File discon = new File("src/pic/disconnected.png");
     private File con = new File("src/pic/connected.png");
 
@@ -103,7 +109,12 @@ public class RootLayoutController {
 
     @FXML
     private void initialize() {
+        serialPort = new SerialPort(serialPortName);
+
         connectionImageView.setImage(new Image(discon.toURI().toString()));
+        oradConnectionController = new OradController(oradControllerAnchorPane, this);
+        oradConnectionController.init();
+
 
         radio25m.setToggleGroup(swimPool);
         radio50m.setToggleGroup(swimPool);
@@ -204,7 +215,7 @@ public class RootLayoutController {
 
     @FXML
     private void startSerial() {
-        serialPort = new SerialPort(serialPortName);
+
         try {
             //Открываем порт
             serialPort.openPort();
@@ -331,6 +342,10 @@ public class RootLayoutController {
             }
         }
         scrollPaneSplits.setContent(splits);
+    }
+
+    public void setOradController(Retalk2ConnectionController controller) {
+        this.controller = controller;
     }
 
 
