@@ -8,6 +8,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import orad.IREConnectionModel;
 import orad.IREConnectionModelListener;
@@ -20,10 +21,12 @@ public class OradController {
     private AnchorPane oradControllerAnchorPane;
     private RootLayoutController rootLayoutController;
     private VBox vBox;
-    private GridPane gridPane;
-    private Button connectionButton, disconnectButton;
+    private GridPane gridPaneREconnection;
+    private Button connectionButton, disconnectButton, loadScene, activateScene, unloadScene;
     private Label connectionStatus;
-    private TextField reAddress, reCanvas;
+    private TextField reAddress, reCanvas, sceneName, sceneSlot;
+    private HBox hBoxConnectionButton, hBoxSceneControl;
+
 
 
     public OradController(AnchorPane oradControllerAnchorPane, RootLayoutController rootLayoutController) {
@@ -35,9 +38,16 @@ public class OradController {
         controller = new Retalk2ConnectionController();
         rootLayoutController.setOradController(controller);
         vBox = (VBox) oradControllerAnchorPane.getChildren().get(0);
-        gridPane = (GridPane) vBox.getChildren().get(0);
-        connectionButton = (Button) vBox.getChildren().get(1);
-        disconnectButton = (Button) vBox.getChildren().get(2);
+        gridPaneREconnection = (GridPane) vBox.getChildren().get(0);
+        hBoxConnectionButton = (HBox) gridPaneREconnection.getChildren().get(6);
+        hBoxSceneControl = (HBox) gridPaneREconnection.getChildren().get(11);
+
+        connectionButton = (Button) hBoxConnectionButton.getChildren().get(0);
+        disconnectButton = (Button) hBoxConnectionButton.getChildren().get(1);
+        loadScene = (Button) hBoxSceneControl.getChildren().get(0);
+        activateScene = (Button) hBoxSceneControl.getChildren().get(1);
+        unloadScene = (Button) hBoxSceneControl.getChildren().get(2);
+
         disconnectButton.setOnAction(new EventHandler<ActionEvent>() {
             @Override
             public void handle(ActionEvent event) {
@@ -51,9 +61,32 @@ public class OradController {
             }
         });
 
-        reAddress = (TextField) gridPane.getChildren().get(3);
-        reCanvas = (TextField) gridPane.getChildren().get(4);
-        connectionStatus = (Label) gridPane.getChildren().get(5);
+        loadScene.setOnAction(new EventHandler<ActionEvent>() {
+            @Override
+            public void handle(ActionEvent event) {
+                controller.sendLoadScene(sceneName.getText());
+            }
+        });
+
+        activateScene.setOnAction(new EventHandler<ActionEvent>() {
+            @Override
+            public void handle(ActionEvent event) {
+                controller.sendActivateScene(sceneName.getText(), 255-Integer.parseInt(sceneSlot.getText()));
+            }
+        });
+
+        unloadScene.setOnAction(new EventHandler<ActionEvent>() {
+            @Override
+            public void handle(ActionEvent event) {
+                controller.sendUnLoadScene(sceneName.getText());
+            }
+        });
+
+        reAddress = (TextField) gridPaneREconnection.getChildren().get(3);
+        reCanvas = (TextField) gridPaneREconnection.getChildren().get(4);
+        sceneName = (TextField) gridPaneREconnection.getChildren().get(8);
+        sceneSlot = (TextField) gridPaneREconnection.getChildren().get(10);
+        connectionStatus = (Label) gridPaneREconnection.getChildren().get(5);
 
         controller.addListener(new IREConnectionModelListener() {
             @Override
