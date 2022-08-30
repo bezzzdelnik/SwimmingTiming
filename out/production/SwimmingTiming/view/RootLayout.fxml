@@ -40,6 +40,11 @@
                                   <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
                                   <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
                                     <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
+                                    <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
+                                    <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
+                                    <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
+                                    <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
+                                    <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
                                 </rowConstraints>
                                  <children>
                                     <Label text="RE adress" />
@@ -47,11 +52,26 @@
                                     <Label text="Connection status:" GridPane.rowIndex="2" />
                                     <TextField fx:id="reAddress" text="localhost" GridPane.columnIndex="1" />
                                     <TextField fx:id="reCanvas" text="Canvas1" GridPane.columnIndex="1" GridPane.rowIndex="1" />
-                                    <Label fx:id="connectionStatus" GridPane.columnIndex="1" GridPane.rowIndex="2" />
+                                    <Label GridPane.columnIndex="1" GridPane.rowIndex="2" />
+                                    <HBox spacing="10.0" GridPane.rowIndex="3">
+                                       <children>
+                                          <Button fx:id="reConnect" mnemonicParsing="false" text="Connect" />
+                                          <Button fx:id="reConnect1" mnemonicParsing="false" text="Diconnect" />
+                                       </children>
+                                    </HBox>
+                                    <Label fx:id="connectionStatus" text="Scene name" GridPane.rowIndex="5" />
+                                    <TextField GridPane.columnIndex="1" GridPane.rowIndex="5" />
+                                    <Label fx:id="connectionStatus1" text="VSlot" GridPane.rowIndex="6" />
+                                    <TextField GridPane.columnIndex="1" GridPane.rowIndex="6" />
+                                    <HBox spacing="10.0" GridPane.columnIndex="1" GridPane.rowIndex="7">
+                                       <children>
+                                          <Button mnemonicParsing="false" text="Load scene" />
+                                          <Button mnemonicParsing="false" text="Activate cene" />
+                                          <Button mnemonicParsing="false" text="Deactivate scene" />
+                                       </children>
+                                    </HBox>
                                  </children>
                               </GridPane>
-                              <Button fx:id="reConnect" mnemonicParsing="false" text="Connect" />
-                              <Button fx:id="reConnect1" layoutX="10.0" layoutY="100.0" mnemonicParsing="false" text="Diconnect" />
                            </children>
                         </VBox>
                      </children></AnchorPane>
