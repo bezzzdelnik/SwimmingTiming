@@ -31,8 +31,7 @@ public class RootLayoutController {
 
     private static SerialPort serialPort;
 
-    private Retalk2ConnectionController controller;
-
+    private Retalk2ConnectionController controller = null;
 
     @FXML
     private TextArea logArea;
@@ -348,6 +347,9 @@ public class RootLayoutController {
         this.controller = controller;
     }
 
+    public Retalk2ConnectionController getController() {
+        return controller;
+    }
 
     private class PortReader implements SerialPortEventListener {
         TextArea logArea;
@@ -367,14 +369,14 @@ public class RootLayoutController {
                 try {
                     String data = serialPort.readString(event.getEventValue());
 
-                    String val;
+                    /*String val;
                     if (data.contains(" 01 ") || data.contains(" 02 ") || data.contains(" 03 ") || data.contains(" 04 ") ||
                             data.contains(" 05 ") || data.contains(" 06 ") || data.contains(" 07 ") || data.contains(" 08 ") ||
                             data.contains(" 09 ") || data.contains(" 10 ") || data.contains(" 11 ") || data.contains(" 12 ") ||
                             data.contains(" 13 ") || data.contains(" 14 ") || data.contains(" 15 ") || data.contains(" 16 ") ||
                             data.contains(" 17 ") || data.contains(" 18 ") || data.contains(" 19 ") || data.contains(" 20 ") ) {
                         val = "<ITEMS><ITEM>1</ITEM></ITEMS>";
-                    } else val = "<ITEMS><ITEM>0</ITEM></ITEMS>";
+                    } else val = "<ITEMS><ITEM>0</ITEM></ITEMS>";*/
 
 
 
@@ -382,12 +384,12 @@ public class RootLayoutController {
                     new Thread(() -> Platform.runLater(() -> logArea.setText(data))).start();
                     new Thread(() -> Platform.runLater(() -> dataReader.readeFile(data))).start();
 
-
+/*
                     BufferedWriter out = new BufferedWriter(new FileWriter(filePath));
                     out.write(val);
-                    out.close();
+                    out.close();*/
                 }
-                catch (SerialPortException | IOException ex) {
+                catch (SerialPortException ex) {
                     ex.printStackTrace();
                 }
             }

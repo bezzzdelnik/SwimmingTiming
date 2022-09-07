@@ -132,6 +132,9 @@ public class OradController {
         controller.setHostName(reAddress.getText());
         controller.setCanvasName(reCanvas.getText());
         controller.connect();
+        if (connectionStatus.equals("Connected")) {
+            rootLayoutController.setOradController(controller);
+        }
     }
 
     private void disconnectRE() {

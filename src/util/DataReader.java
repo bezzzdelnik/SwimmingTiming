@@ -14,6 +14,8 @@ public class DataReader {
     static String BS = "\b";
     private static String bf;
 
+    private boolean recordLineIsShowed = false;
+
     private ObservableList<Participant> participants;
     private RootLayoutController rootLayoutController;
 
@@ -79,8 +81,14 @@ public class DataReader {
 
     public void readTimer(String output) {
         if (output.contains("SOHDC4R02STXBS1")) {
-            String tmp = output.split("\\s+")[2];
-            new Thread(() -> Platform.runLater(() -> rootLayoutController.timerLabel.setText(tmp))).start();
+            String timer = output.split("\\s+")[2];
+            new Thread(() -> Platform.runLater(() -> rootLayoutController.timerLabel.setText(timer))).start();
+            if (timer.equals("0.1") || timer.equals("0.2") || timer.equals("0.3") || timer.equals("0.4")) {
+                if (!recordLineIsShowed) {
+                    showRecordLine();
+                    recordLineIsShowed = true;
+                }
+            }
         }
 
     }
@@ -104,7 +112,7 @@ public class DataReader {
             if (output.split("\\s+").length == 5) {
                 int lane = Integer.parseInt(output.split("\\s+")[2]);
                 String time = output.split("\\s+")[3];
-                String place = output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", "");
+                int place = Integer.parseInt(output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", ""));
                 int splitCount = participants.get(lane).getSplitCount();
 
                 if (participants.get(lane).getSplits().get(splitCount).getSpl().equals("")) {
@@ -117,7 +125,10 @@ public class DataReader {
                     if(splitCount == participants.get(lane).getSplits().size() - 1){
                         new Thread(() -> Platform.runLater(() ->
                                 participants.get(lane).setName(place + " " + participants.get(lane).getName()))).start();
-
+                        if (place <= 3) {
+                            showSplit(lane, place);
+                        }
+                        participants.get(lane).setPlace(place);
                     }
                 }
 
@@ -127,5 +138,14 @@ public class DataReader {
             }
 
         }
+    }
+
+    private void showSplit(int lane, int place) {
+        rootLayoutController.getController().sendSetExport("Olympic/swimming", "number_" + lane, String.valueOf(place));
+        rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + lane);
+    }
+
+    private void showRecordLine(){
+        rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "WR_in");
     }
 }

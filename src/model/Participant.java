@@ -9,13 +9,13 @@ import javafx.collections.ObservableList;
 
 public class Participant {
     private final StringProperty name;
-    private final StringProperty place;
+    private final IntegerProperty place;
     private final IntegerProperty splitCount;
     private ObservableList<Split> splits = FXCollections.observableArrayList();
 
     public Participant() {
         this.name = new SimpleStringProperty("");
-        this.place = new SimpleStringProperty("");
+        this.place = new SimpleIntegerProperty(0);
         this.splitCount = new SimpleIntegerProperty(0);
     }
 
@@ -31,15 +31,15 @@ public class Participant {
         this.name.set(name);
     }
 
-    public String getPlace() {
+    public int getPlace() {
         return place.get();
     }
 
-    public StringProperty placeProperty() {
+    public IntegerProperty placeProperty() {
         return place;
     }
 
-    public void setPlace(String place) {
+    public void setPlace(int place) {
         this.place.set(place);
     }
 
