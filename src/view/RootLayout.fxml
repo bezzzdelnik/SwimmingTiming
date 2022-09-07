@@ -171,7 +171,12 @@
                                        </padding>
                                     </HBox>
                                     <ScrollPane fx:id="scrollPaneSplits" fitToHeight="true" maxWidth="5000.0" minHeight="350.0" prefHeight="350.0" prefWidth="1324.0" />
-                                    <Button mnemonicParsing="false" text="Button" />
+                                    <HBox spacing="20.0">
+                                       <children>
+                                          <Button mnemonicParsing="false" onAction="#hideLeaders" text="Скрыть лидеров" />
+                                          <Button mnemonicParsing="false" onAction="#hideRecordLine" text="Скрыть линию" />
+                                       </children>
+                                    </HBox>
                                  </children>
                               </VBox>
                               <TextArea fx:id="logArea" layoutY="240.0" prefHeight="50.0" AnchorPane.bottomAnchor="10.0" AnchorPane.leftAnchor="10.0" AnchorPane.rightAnchor="10.0" />

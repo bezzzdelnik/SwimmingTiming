@@ -126,21 +126,22 @@ public class DataReader {
                         new Thread(() -> Platform.runLater(() ->
                                 participants.get(lane).setName(place + " " + participants.get(lane).getName()))).start();
                         if (place <= 3) {
-                            showSplit(lane, place);
+                            showLeaders(lane, place);
                         }
                         participants.get(lane).setPlace(place);
                     }
                 }
 
 
-                System.out.println("Place - " + place + " " +"Lane - " + lane + " " + "Time - " + time);
+                //System.out.println("Place - " + place + " " +"Lane - " + lane + " " + "Time - " + time);
 
             }
 
         }
     }
 
-    private void showSplit(int lane, int place) {
+    private void showLeaders(int lane, int place) {
+        rootLayoutController.getController().sendSetExport("Olympic/swimming", "_numbers_mode", "0");
         rootLayoutController.getController().sendSetExport("Olympic/swimming", "number_" + lane, String.valueOf(place));
         rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + lane);
     }

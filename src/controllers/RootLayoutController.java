@@ -351,6 +351,14 @@ public class RootLayoutController {
         return controller;
     }
 
+    @FXML private void hideLeaders() {
+
+    }
+
+    @FXML private void hideRecordLine() {
+
+    }
+
     private class PortReader implements SerialPortEventListener {
         TextArea logArea;
         String filePath;
