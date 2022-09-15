@@ -25,7 +25,7 @@
    <top>
       <TabPane BorderPane.alignment="CENTER">
          <tabs>
-            <Tab text="Orad Connection">
+            <Tab closable="false" text="Orad Connection">
               <content>
                 <AnchorPane fx:id="oradControllerAnchorPane" minHeight="0.0" minWidth="0.0" prefHeight="180.0" prefWidth="200.0">
                      <children>
@@ -77,12 +77,7 @@
                      </children></AnchorPane>
               </content>
             </Tab>
-            <Tab text="Scene Controller">
-              <content>
-                <AnchorPane fx:id="sceneController" minHeight="0.0" minWidth="0.0" prefHeight="180.0" prefWidth="200.0" />
-              </content>
-            </Tab>
-            <Tab text="Swim Controller">
+            <Tab closable="false" text="Swim Controller">
                <content>
                   <SplitPane dividerPositions="0.24547600314712825" maxHeight="1.7976931348623157E308" prefHeight="1080.0" prefWidth="1920.0">
                     <items>
@@ -171,7 +166,12 @@
                                        </padding>
                                     </HBox>
                                     <ScrollPane fx:id="scrollPaneSplits" fitToHeight="true" maxWidth="5000.0" minHeight="350.0" prefHeight="350.0" prefWidth="1324.0" />
-                                    <Button mnemonicParsing="false" text="Button" />
+                                    <HBox spacing="20.0">
+                                       <children>
+                                          <Button mnemonicParsing="false" onAction="#hideLeaders" text="Убрать лидеров" />
+                                          <Button mnemonicParsing="false" onAction="#hideRecordLine" text="Убрать линию" />
+                                       </children>
+                                    </HBox>
                                  </children>
                               </VBox>
                               <TextArea fx:id="logArea" layoutY="240.0" prefHeight="50.0" AnchorPane.bottomAnchor="10.0" AnchorPane.leftAnchor="10.0" AnchorPane.rightAnchor="10.0" />

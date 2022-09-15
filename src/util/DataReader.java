@@ -24,7 +24,7 @@ public class DataReader {
         this.rootLayoutController = rootLayoutController;
     }
 
-    public void readeFile(String data) {
+    public void parseData(String data) {
 
         bf += data;
         if (bf.contains(SOH) && bf.contains(EOT)) {
@@ -125,10 +125,11 @@ public class DataReader {
                     if(splitCount == participants.get(lane).getSplits().size() - 1){
                         new Thread(() -> Platform.runLater(() ->
                                 participants.get(lane).setName(place + " " + participants.get(lane).getName()))).start();
-                        if (place <= 3) {
+                        if (place <= 3 && place != 0) {
                             showLeaders(lane, place);
                         }
                         participants.get(lane).setPlace(place);
+                        participants.get(lane).setIsShowed(true);
                     }
                 }
 
@@ -142,8 +143,8 @@ public class DataReader {
 
     private void showLeaders(int lane, int place) {
         rootLayoutController.getController().sendSetExport("Olympic/swimming", "_numbers_mode", "0");
-        rootLayoutController.getController().sendSetExport("Olympic/swimming", "number_" + lane, String.valueOf(place));
-        rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + lane);
+        rootLayoutController.getController().sendSetExport("Olympic/swimming", "number_" + (lane + 1), String.valueOf(place));
+        rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + (lane + 1));
     }
 
     private void showRecordLine(){

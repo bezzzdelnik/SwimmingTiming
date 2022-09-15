@@ -352,11 +352,15 @@ public class RootLayoutController {
     }
 
     @FXML private void hideLeaders() {
-
+        for (int i = 0; i < participants.size(); i++) {
+            if (participants.get(i).isShowed()) {
+                controller.sendAnimationPlay("Olympic/swimming", "swimmer_out_" + (i + 1));
+            }
+        }
     }
 
     @FXML private void hideRecordLine() {
-
+        controller.sendAnimationPlay("Olympic/swimming", "WR_out");
     }
 
     private class PortReader implements SerialPortEventListener {
@@ -390,7 +394,7 @@ public class RootLayoutController {
 
 
                     new Thread(() -> Platform.runLater(() -> logArea.setText(data))).start();
-                    new Thread(() -> Platform.runLater(() -> dataReader.readeFile(data))).start();
+                    new Thread(() -> Platform.runLater(() -> dataReader.parseData(data))).start();
 
 /*
                     BufferedWriter out = new BufferedWriter(new FileWriter(filePath));

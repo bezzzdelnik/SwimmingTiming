@@ -1,9 +1,6 @@
 package model;
 
-import javafx.beans.property.IntegerProperty;
-import javafx.beans.property.SimpleIntegerProperty;
-import javafx.beans.property.SimpleStringProperty;
-import javafx.beans.property.StringProperty;
+import javafx.beans.property.*;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 
@@ -12,11 +9,25 @@ public class Participant {
     private final IntegerProperty place;
     private final IntegerProperty splitCount;
     private ObservableList<Split> splits = FXCollections.observableArrayList();
+    private final BooleanProperty showed;
 
     public Participant() {
         this.name = new SimpleStringProperty("");
         this.place = new SimpleIntegerProperty(0);
         this.splitCount = new SimpleIntegerProperty(0);
+        this.showed = new SimpleBooleanProperty(false);
+    }
+
+    public boolean isShowed() {
+        return showed.get();
+    }
+
+    public BooleanProperty isShowedProperty() {
+        return showed;
+    }
+
+    public void setIsShowed(boolean showed) {
+        this.showed.set(showed);
     }
 
     public String getName() {
