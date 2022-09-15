@@ -84,10 +84,7 @@ public class DataReader {
             String timer = output.split("\\s+")[2];
             new Thread(() -> Platform.runLater(() -> rootLayoutController.timerLabel.setText(timer))).start();
             if (timer.equals("0.1") || timer.equals("0.2") || timer.equals("0.3") || timer.equals("0.4")) {
-                if (!recordLineIsShowed) {
-                    showRecordLine();
-                    recordLineIsShowed = true;
-                }
+                startRecordLine();
             }
         }
 
@@ -147,7 +144,7 @@ public class DataReader {
         rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + (lane + 1));
     }
 
-    private void showRecordLine(){
-        rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "WR_in");
+    private void startRecordLine(){
+        rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swim");
     }
 }

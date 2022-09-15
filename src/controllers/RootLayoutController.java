@@ -363,6 +363,10 @@ public class RootLayoutController {
         controller.sendAnimationPlay("Olympic/swimming", "WR_out");
     }
 
+    @FXML private void showRecordLine(){
+        controller.sendAnimationPlay("Olympic/swimming", "WR_in");
+    }
+
     private class PortReader implements SerialPortEventListener {
         TextArea logArea;
         String filePath;

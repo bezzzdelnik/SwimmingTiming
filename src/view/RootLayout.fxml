@@ -169,6 +169,7 @@
                                     <HBox spacing="20.0">
                                        <children>
                                           <Button mnemonicParsing="false" onAction="#hideLeaders" text="Убрать лидеров" />
+                                          <Button mnemonicParsing="false" onAction="#showRecordLine" text="Показать линию" />
                                           <Button mnemonicParsing="false" onAction="#hideRecordLine" text="Убрать линию" />
                                        </children>
                                     </HBox>
