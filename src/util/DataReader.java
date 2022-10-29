@@ -99,6 +99,9 @@ public class DataReader {
             new Thread(() -> Platform.runLater(() -> {
                 participants.get(Integer.parseInt(output.replaceAll("\\|", "").split("\\s+")[2])).
                         setName(output.replaceAll("\\||EOT", "").split("\\s+", 5)[4]);
+                rootLayoutController.firstPlaceText.clear();
+                rootLayoutController.secondPlaceText.clear();
+                rootLayoutController.thirdPlaceText.clear();
             })).start();
         }
 
@@ -120,19 +123,12 @@ public class DataReader {
 
                     }
                     if(splitCount == participants.get(lane).getSplits().size() - 1){
-                        new Thread(() -> Platform.runLater(() ->
-                                participants.get(lane).setName(place + " " + participants.get(lane).getName()))).start();
+                        participants.get(lane).setPlace(place);
                         if (place <= 3 && place != 0) {
                             showLeaders(lane, place);
                         }
-                        participants.get(lane).setPlace(place);
-                        participants.get(lane).setIsShowed(true);
                     }
                 }
-
-
-                //System.out.println("Place - " + place + " " +"Lane - " + lane + " " + "Time - " + time);
-
             }
 
         }
@@ -142,6 +138,23 @@ public class DataReader {
         rootLayoutController.getController().sendSetExport("Olympic/swimming", "_numbers_mode", "0");
         rootLayoutController.getController().sendSetExport("Olympic/swimming", "number_" + (lane + 1), String.valueOf(place));
         rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + (lane + 1));
+        participants.get(lane).setIsShowed(true);
+        if (place == 1) {
+            new Thread(() -> Platform.runLater(() ->
+                rootLayoutController.firstPlaceText.setText("дорожка " + lane + "   " + participants.get(lane).getName())
+            )).start();
+        }
+        if (place == 2) {
+            new Thread(() -> Platform.runLater(() ->
+                    rootLayoutController.secondPlaceText.setText("дорожка " + lane + "   " + participants.get(lane).getName())
+            )).start();
+        }
+        if (place == 3) {
+            new Thread(() -> Platform.runLater(() ->
+                    rootLayoutController.thirdPlaceText.setText("дорожка " + lane + "   " + participants.get(lane).getName())
+            )).start();
+        }
+        System.out.println("место " + place + "   дорожка " + lane + "   " + participants.get(lane).getName() + " отпралено на рендер");
     }
 
     private void startRecordLine(){

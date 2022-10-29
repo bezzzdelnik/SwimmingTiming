@@ -71,6 +71,8 @@ public class RootLayoutController {
 
     @FXML private AnchorPane oradControllerAnchorPane;
 
+    @FXML public TextField thirdPlaceText, secondPlaceText, firstPlaceText;
+
     private OradController oradConnectionController;
 
     private File discon = new File("src/pic/disconnected.png");
@@ -291,6 +293,10 @@ public class RootLayoutController {
         splits.setHgap(10);
         participants.clear();
 
+        firstPlaceText.clear();
+        secondPlaceText.clear();
+        thirdPlaceText.clear();
+
         int columns = distance / swimPoolSize;
         Label nameLabel = new Label("Имя");
         Label laneLabel = new Label("Дорожка");
@@ -357,6 +363,9 @@ public class RootLayoutController {
                 controller.sendAnimationPlay("Olympic/swimming", "swimmer_out_" + (i + 1));
             }
         }
+        firstPlaceText.clear();
+        secondPlaceText.clear();
+        thirdPlaceText.clear();
     }
 
     @FXML private void hideRecordLine() {
