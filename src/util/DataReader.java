@@ -92,7 +92,12 @@ public class DataReader {
 
     public void readStartList(String output) {
         if (output.contains("SOH98STXSTARTEOT")) {
-            new Thread(() -> Platform.runLater(() -> rootLayoutController.createGridPaneSplits())).start();
+            new Thread(() -> Platform.runLater(() -> {
+                rootLayoutController.createGridPaneSplits();
+                rootLayoutController.firstPlaceText.clear();
+                rootLayoutController.secondPlaceText.clear();
+                rootLayoutController.thirdPlaceText.clear();
+            })).start();
         }
 
         if (output.contains("SOH98STXSLH")) {
@@ -107,9 +112,16 @@ public class DataReader {
     public void readSplits(String output) {
         if (output.contains("SOHDC4S02STXBS")) {
             if (output.split("\\s+").length == 5) {
+                int place = 0;
                 int lane = Integer.parseInt(output.split("\\s+")[2]);
                 String time = output.split("\\s+")[3];
-                int place = Integer.parseInt(output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", ""));
+                String placeString = output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", "");
+                //int place = Integer.parseInt(output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", ""));
+                try {
+                    place = Integer.parseInt(placeString);
+                } catch (NumberFormatException e) {
+                    place = 0;
+                }
                 int splitCount = participants.get(lane).getSplitCount();
 
                 if (participants.get(lane).getSplits().get(splitCount).getSpl().equals("")) {
@@ -120,19 +132,12 @@ public class DataReader {
 
                     }
                     if(splitCount == participants.get(lane).getSplits().size() - 1){
-                        new Thread(() -> Platform.runLater(() ->
-                                participants.get(lane).setName(place + " " + participants.get(lane).getName()))).start();
+                        participants.get(lane).setPlace(place);
                         if (place <= 3 && place != 0) {
                             showLeaders(lane, place);
                         }
-                        participants.get(lane).setPlace(place);
-                        participants.get(lane).setIsShowed(true);
                     }
                 }
-
-
-                //System.out.println("Place - " + place + " " +"Lane - " + lane + " " + "Time - " + time);
-
             }
 
         }
@@ -142,6 +147,26 @@ public class DataReader {
         rootLayoutController.getController().sendSetExport("Olympic/swimming", "_numbers_mode", "0");
         rootLayoutController.getController().sendSetExport("Olympic/swimming", "number_" + (lane + 1), String.valueOf(place));
         rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + (lane + 1));
+        participants.get(lane).setIsShowed(true);
+        if (place == 1) {
+            new Thread(() -> Platform.runLater(() ->{
+                rootLayoutController.firstPlaceText.setText("Lane " + lane + "   " + participants.get(lane).getName());
+                System.out.println("place " + place + "   lane " + lane + "   " + participants.get(lane).getName() + " send to RE");
+            })).start();
+        }
+        if (place == 2) {
+            new Thread(() -> Platform.runLater(() -> {
+                rootLayoutController.secondPlaceText.setText("Lane " + lane + "   " + participants.get(lane).getName());
+                System.out.println("place " + place + "   lane " + lane + "   " + participants.get(lane).getName() + " send to RE");
+            })).start();
+        }
+        if (place == 3) {
+            new Thread(() -> Platform.runLater(() -> {
+                rootLayoutController.thirdPlaceText.setText("Lane " + lane + "   " + participants.get(lane).getName());
+                System.out.println("place " + place + "   lane " + lane + "   " + participants.get(lane).getName() + " send to RE");
+            })).start();
+        }
+
     }
 
     private void startRecordLine(){

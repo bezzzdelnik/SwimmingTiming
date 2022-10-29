@@ -48,7 +48,7 @@
     <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2Settings.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/util/CommonUtils.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/util/Constants.java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/src/util/DataReader.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/util/DataReader.java" charset="windows-1251" />
     <file url="file://$PROJECT_DIR$/src/util/MessageBuilder.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/util" charset="windows-1251" />
     <file url="file://$PROJECT_DIR$/util/DataReader.java" charset="UTF-8" />

@@ -71,6 +71,8 @@ public class RootLayoutController {
 
     @FXML private AnchorPane oradControllerAnchorPane;
 
+    @FXML public TextField thirdPlaceText, secondPlaceText, firstPlaceText;
+
     private OradController oradConnectionController;
 
     private File discon = new File("src/pic/disconnected.png");
@@ -291,6 +293,10 @@ public class RootLayoutController {
         splits.setHgap(10);
         participants.clear();
 
+        firstPlaceText.clear();
+        secondPlaceText.clear();
+        thirdPlaceText.clear();
+
         int columns = distance / swimPoolSize;
         Label nameLabel = new Label("Имя");
         Label laneLabel = new Label("Дорожка");
@@ -357,6 +363,9 @@ public class RootLayoutController {
                 controller.sendAnimationPlay("Olympic/swimming", "swimmer_out_" + (i + 1));
             }
         }
+        firstPlaceText.clear();
+        secondPlaceText.clear();
+        thirdPlaceText.clear();
     }
 
     @FXML private void hideRecordLine() {
@@ -385,25 +394,10 @@ public class RootLayoutController {
                 try {
                     String data = serialPort.readString(event.getEventValue());
 
-                    /*String val;
-                    if (data.contains(" 01 ") || data.contains(" 02 ") || data.contains(" 03 ") || data.contains(" 04 ") ||
-                            data.contains(" 05 ") || data.contains(" 06 ") || data.contains(" 07 ") || data.contains(" 08 ") ||
-                            data.contains(" 09 ") || data.contains(" 10 ") || data.contains(" 11 ") || data.contains(" 12 ") ||
-                            data.contains(" 13 ") || data.contains(" 14 ") || data.contains(" 15 ") || data.contains(" 16 ") ||
-                            data.contains(" 17 ") || data.contains(" 18 ") || data.contains(" 19 ") || data.contains(" 20 ") ) {
-                        val = "<ITEMS><ITEM>1</ITEM></ITEMS>";
-                    } else val = "<ITEMS><ITEM>0</ITEM></ITEMS>";*/
-
-
-
 
                     new Thread(() -> Platform.runLater(() -> logArea.setText(data))).start();
                     new Thread(() -> Platform.runLater(() -> dataReader.parseData(data))).start();
 
-/*
-                    BufferedWriter out = new BufferedWriter(new FileWriter(filePath));
-                    out.write(val);
-                    out.close();*/
                 }
                 catch (SerialPortException ex) {
                     ex.printStackTrace();
