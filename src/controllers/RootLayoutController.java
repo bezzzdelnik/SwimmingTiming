@@ -22,8 +22,10 @@ import orad.retalk2.Retalk2ConnectionController;
 import util.DataReader;
 
 import java.io.*;
+import java.util.Properties;
 
 public class RootLayoutController {
+    private Properties properties = new Properties();
     private Stage primaryStage;
     public void setPrimaryStage(Stage primaryStage) {
         this.primaryStage = primaryStage;
@@ -71,6 +73,8 @@ public class RootLayoutController {
 
     @FXML private AnchorPane oradControllerAnchorPane;
 
+    @FXML private TextField reAddress, reCanvas;
+
     @FXML public TextField thirdPlaceText, secondPlaceText, firstPlaceText;
 
     private OradController oradConnectionController;
@@ -110,6 +114,8 @@ public class RootLayoutController {
 
     @FXML
     private void initialize() {
+        loadProperties();
+
         serialPort = new SerialPort(serialPortName);
 
         connectionImageView.setImage(new Image(discon.toURI().toString()));
@@ -132,14 +138,37 @@ public class RootLayoutController {
         parityComboBox.setItems(parityList);
         flowControlComboBox.setItems(flowControlList);
 
-        portField.textProperty().addListener((observable, oldValue, newValue) -> serialPortName = newValue);
+        // speedComboBox.getSelectionModel().select(properties.getProperty("serialSpeed"));
+        // dataBitsComboBox.getSelectionModel().select(properties.getProperty("serialDataBits"));
+       // stopBitsComboBox.getSelectionModel().select(properties.getProperty("serialStopBits"));
+       // parityComboBox.getSelectionModel().select(properties.getProperty("serialParity"));
+       // flowControlComboBox.getSelectionModel().select(properties.getProperty("serialFlow"));
+
+        reAddress.textProperty().addListener((observable, oldValue, newValue) ->{
+            setProperties("reAddress", newValue);
+        });
+
+        reCanvas.textProperty().addListener((observable, oldValue, newValue) ->{
+            setProperties("reCanvas", newValue);
+        });
+
+        portField.textProperty().addListener((observable, oldValue, newValue) -> {
+            serialPortName = newValue;
+            setProperties("serialPort", newValue);
+        });
 
         speedComboBox.getSelectionModel().selectedItemProperty().addListener(
-                (observable, oldValue, newValue) -> serialSpeed = Integer.parseInt(newValue));
+                (observable, oldValue, newValue) -> {
+                    serialSpeed = Integer.parseInt(newValue);
+                    setProperties("serialSpeed", newValue);
+                });
 
 
         dataBitsComboBox.getSelectionModel().selectedItemProperty().addListener(
-                (observable, oldValue, newValue) -> serialDataBits = Integer.parseInt(newValue));
+                (observable, oldValue, newValue) -> {
+                    serialDataBits = Integer.parseInt(newValue);
+                    setProperties("serialDataBits", newValue);
+                });
 
         stopBitsComboBox.getSelectionModel().selectedItemProperty().addListener(
                 (observable, oldValue, newValue) -> {
@@ -152,6 +181,7 @@ public class RootLayoutController {
                     if (newValue.equals("1.5")) {
                         serialStopBits = 3;
                     }
+                    setProperties("serialStopBits", newValue);
                 });
 
         parityComboBox.getSelectionModel().selectedItemProperty().addListener(
@@ -171,6 +201,7 @@ public class RootLayoutController {
                     if (newValue.equals("Space")) {
                         serialParity = 4;
                     }
+                    setProperties("serialParity", newValue);
                 });
 
         flowControlComboBox.getSelectionModel().selectedItemProperty().addListener(
@@ -187,6 +218,7 @@ public class RootLayoutController {
                         serialFlowControl1 = 4;
                         serialFlowControl2 = 8;
                     }
+                    setProperties("serialFlow", newValue);
                 });
         distanceGroup.selectedToggleProperty().addListener((observable, oldValue, newValue) -> {
             RadioButton selectedBtn = (RadioButton) newValue;
@@ -374,6 +406,42 @@ public class RootLayoutController {
 
     @FXML private void showRecordLine(){
         controller.sendAnimationPlay("Olympic/swimming", "WR_in");
+    }
+
+
+    private void loadProperties() {
+        try (InputStream input = new FileInputStream("config.properties")) {
+
+            properties.load(input);
+
+            reAddress.setText(properties.getProperty("reAddress"));
+            reCanvas.setText(properties.getProperty("reCanvas"));
+
+            portField.setText(properties.getProperty("serialPort"));
+            speedComboBox.getSelectionModel().select(properties.getProperty("serialSpeed"));
+            dataBitsComboBox.getSelectionModel().select(properties.getProperty("serialDataBits"));
+            stopBitsComboBox.getSelectionModel().select(properties.getProperty("serialStopBits"));
+            parityComboBox.getSelectionModel().select(properties.getProperty("serialParity"));
+            flowControlComboBox.getSelectionModel().select(properties.getProperty("serialFlow"));
+
+        } catch (IOException ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    private void setProperties(String key, String value) {
+        properties.setProperty(key, value);
+        writeProperties();
+    }
+
+    private void writeProperties() {
+        try (OutputStream output = new FileOutputStream("config.properties")) {
+
+            properties.store(output, null);
+
+        } catch (IOException io) {
+            io.printStackTrace();
+        }
     }
 
     private class PortReader implements SerialPortEventListener {
