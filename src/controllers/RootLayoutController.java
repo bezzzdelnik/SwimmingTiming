@@ -22,6 +22,7 @@ import orad.retalk2.Retalk2ConnectionController;
 import util.DataReader;
 
 import java.io.*;
+import java.nio.charset.Charset;
 import java.util.Properties;
 
 public class RootLayoutController {
@@ -42,22 +43,7 @@ public class RootLayoutController {
     private TextField portField;
 
     @FXML
-    private ComboBox<String> parityComboBox;
-
-    @FXML
-    private ComboBox<String> flowControlComboBox;
-
-    @FXML
-    private TextField fileNameField;
-
-    @FXML
-    private ComboBox<String> speedComboBox;
-
-    @FXML
-    private ComboBox<String> dataBitsComboBox;
-
-    @FXML
-    private ComboBox<String> stopBitsComboBox;
+    private ComboBox<String> parityComboBox, flowControlComboBox, speedComboBox, dataBitsComboBox, stopBitsComboBox, encodingComboBox;
 
     @FXML private ScrollPane scrollPaneSplits;
 
@@ -79,8 +65,8 @@ public class RootLayoutController {
 
     private OradController oradConnectionController;
 
-    private File discon = new File("src/pic/disconnected.png");
-    private File con = new File("src/pic/connected.png");
+    private String discon = "/pic/disconnected.png";
+    private String con = "/pic/connected.png";
 
     private GridPane splits = new GridPane();
 
@@ -101,6 +87,8 @@ public class RootLayoutController {
     private final ObservableList<String> dataBitsList = FXCollections.observableArrayList("5", "6", "7", "8");
     private final ObservableList<String> stopBits = FXCollections.observableArrayList("1", "2", "1.5");
 
+    private final ObservableList<String> encodingList = FXCollections.observableArrayList("UTF-8", "Windows-1251");
+
     private String serialPortName = "COM1";
     private int serialSpeed = 9600;
     private int serialDataBits = 8;
@@ -118,7 +106,7 @@ public class RootLayoutController {
 
         serialPort = new SerialPort(serialPortName);
 
-        connectionImageView.setImage(new Image(discon.toURI().toString()));
+        connectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
         oradConnectionController = new OradController(oradControllerAnchorPane, this);
         oradConnectionController.init();
 
@@ -137,12 +125,8 @@ public class RootLayoutController {
         stopBitsComboBox.setItems(stopBits);
         parityComboBox.setItems(parityList);
         flowControlComboBox.setItems(flowControlList);
+        encodingComboBox.setItems(encodingList);
 
-        // speedComboBox.getSelectionModel().select(properties.getProperty("serialSpeed"));
-        // dataBitsComboBox.getSelectionModel().select(properties.getProperty("serialDataBits"));
-       // stopBitsComboBox.getSelectionModel().select(properties.getProperty("serialStopBits"));
-       // parityComboBox.getSelectionModel().select(properties.getProperty("serialParity"));
-       // flowControlComboBox.getSelectionModel().select(properties.getProperty("serialFlow"));
 
         reAddress.textProperty().addListener((observable, oldValue, newValue) ->{
             setProperties("reAddress", newValue);
@@ -225,26 +209,17 @@ public class RootLayoutController {
             setDistance(selectedBtn);
         });
 
+        encodingComboBox.getSelectionModel().selectedItemProperty().addListener(
+                (observable, oldValue, newValue) -> {
+                    setProperties("encoding", newValue);
+                });
+
 
 
 
         createGridPaneSplits();
     }
 
-
-
-    @FXML
-    private void handleSaveAs() {
-        FileChooser fileChooser = new FileChooser();
-        // Задаём фильтр расширений
-        FileChooser.ExtensionFilter extFilter = new FileChooser.ExtensionFilter(
-                "XML files (*.xml)", "*.xml");
-        fileChooser.getExtensionFilters().add(extFilter);
-
-        // Показываем диалог сохранения файла
-        File file = fileChooser.showSaveDialog(primaryStage);
-        fileNameField.setText(file.getPath());
-    }
 
     @FXML
     private void startSerial() {
@@ -261,12 +236,10 @@ public class RootLayoutController {
             serialPort.setFlowControlMode(serialFlowControl1 |
                     serialFlowControl2);
             //Устанавливаем ивент лисенер и маску
-            if (!fileNameField.getText().isEmpty()) {
-                serialPort.addEventListener(new PortReader(logArea, fileNameField.getText(), this), SerialPort.MASK_RXCHAR);
-            }
+            serialPort.addEventListener(new PortReader(logArea, this), SerialPort.MASK_RXCHAR);
             //Отправляем запрос устройству
             if (serialPort.isOpened()) {
-                connectionImageView.setImage(new Image(con.toURI().toString()));
+                connectionImageView.setImage(new Image(getClass().getResourceAsStream(con)));
                 connectionLabel.setText("Connected");
                 startSerialButton.setDisable(true);
                 stopSerialButton.setDisable(false);
@@ -291,7 +264,7 @@ public class RootLayoutController {
                     stopSerialButton.setDisable(true);
                     startSerialButton.setDisable(false);
                     connectionLabel.setText("Disconnected");
-                    connectionImageView.setImage(new Image(discon.toURI().toString()));
+                    connectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
                 }
 
             }
@@ -423,6 +396,7 @@ public class RootLayoutController {
             stopBitsComboBox.getSelectionModel().select(properties.getProperty("serialStopBits"));
             parityComboBox.getSelectionModel().select(properties.getProperty("serialParity"));
             flowControlComboBox.getSelectionModel().select(properties.getProperty("serialFlow"));
+            encodingComboBox.getSelectionModel().select(properties.getProperty("encoding"));
 
         } catch (IOException ex) {
             ex.printStackTrace();
@@ -450,9 +424,8 @@ public class RootLayoutController {
         RootLayoutController rootLayoutController;
 
 
-        public PortReader(TextArea logArea, String filePath, RootLayoutController rootLayoutController) {
+        public PortReader(TextArea logArea, RootLayoutController rootLayoutController) {
             this.logArea = logArea;
-            this.filePath = filePath;
             this.rootLayoutController = rootLayoutController;
         }
 
@@ -460,7 +433,9 @@ public class RootLayoutController {
 
             if(event.isRXCHAR() && event.getEventValue() > 0){
                 try {
-                    String data = serialPort.readString(event.getEventValue());
+                    byte[] bytes = serialPort.readBytes(event.getEventValue());
+                    //String data = serialPort.readString(event.getEventValue());
+                    String data = new String(bytes, Charset.forName(encodingComboBox.getSelectionModel().getSelectedItem()));
 
 
                     new Thread(() -> Platform.runLater(() -> logArea.setText(data))).start();

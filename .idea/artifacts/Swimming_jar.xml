@@ -1,0 +1,9 @@
+﻿<component name="ArtifactManager">
+  <artifact type="jar" name="Swimming:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/Swimming_jar</output-path>
+    <root id="archive" name="Swimming.jar">
+      <element id="module-output" name="SwimmingTiming" />
+      <element id="extracted-dir" path="$PROJECT_DIR$/src/lib/jssc-2.9.4.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>

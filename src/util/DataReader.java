@@ -28,7 +28,7 @@ public class DataReader {
 
         bf += data;
         if (bf.contains(SOH) && bf.contains(EOT)) {
-            readData(bf.replaceAll("\n", ""));
+            readData(bf.replaceAll("[\r\n]", ""));
         }
 
 
@@ -113,28 +113,36 @@ public class DataReader {
         if (output.contains("SOHDC4S02STXBS")) {
             if (output.split("\\s+").length == 5) {
                 int place = 0;
-                int lane = Integer.parseInt(output.split("\\s+")[2]);
+                int lane = -1;
                 String time = output.split("\\s+")[3];
                 String placeString = output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", "");
-                //int place = Integer.parseInt(output.split("\\s+")[0].replaceAll("SOHDC4S02STXBS", ""));
+
                 try {
                     place = Integer.parseInt(placeString);
                 } catch (NumberFormatException e) {
-                    place = 0;
+                    System.out.println(e);
                 }
-                int splitCount = participants.get(lane).getSplitCount();
 
-                if (participants.get(lane).getSplits().get(splitCount).getSpl().equals("")) {
-                    participants.get(lane).getSplits().get(splitCount).setSpl(time);
+                try {
+                    lane = Integer.parseInt(output.split("\\s+")[2]);
+                } catch (NumberFormatException e) {
+                    System.out.println(e);
+                }
 
-                    if (splitCount < participants.get(lane).getSplits().size() - 1) {
-                        participants.get(lane).setSplitCount(splitCount+1);
+                if (lane >= 0) {
+                    int splitCount  = participants.get(lane).getSplitCount();
+                    if (participants.get(lane).getSplits().get(splitCount).getSpl().equals("")) {
+                        participants.get(lane).getSplits().get(splitCount).setSpl(time);
 
-                    }
-                    if(splitCount == participants.get(lane).getSplits().size() - 1){
-                        participants.get(lane).setPlace(place);
-                        if (place <= 3 && place != 0) {
-                            showLeaders(lane, place);
+                        if (splitCount < participants.get(lane).getSplits().size() - 1) {
+                            participants.get(lane).setSplitCount(splitCount+1);
+                        }
+
+                        if(splitCount == participants.get(lane).getSplits().size() - 1){
+                            participants.get(lane).setPlace(place);
+                            if (place <= 3 && place != 0) {
+                                showLeaders(lane, place);
+                            }
                         }
                     }
                 }
@@ -148,24 +156,21 @@ public class DataReader {
         rootLayoutController.getController().sendSetExport("Olympic/swimming", "number_" + (lane + 1), String.valueOf(place));
         rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + (lane + 1));
         participants.get(lane).setIsShowed(true);
-        if (place == 1) {
-            new Thread(() -> Platform.runLater(() ->{
-                rootLayoutController.firstPlaceText.setText("Lane " + lane + "   " + participants.get(lane).getName());
-                System.out.println("place " + place + "   lane " + lane + "   " + participants.get(lane).getName() + " send to RE");
-            })).start();
-        }
-        if (place == 2) {
-            new Thread(() -> Platform.runLater(() -> {
-                rootLayoutController.secondPlaceText.setText("Lane " + lane + "   " + participants.get(lane).getName());
-                System.out.println("place " + place + "   lane " + lane + "   " + participants.get(lane).getName() + " send to RE");
-            })).start();
-        }
-        if (place == 3) {
-            new Thread(() -> Platform.runLater(() -> {
-                rootLayoutController.thirdPlaceText.setText("Lane " + lane + "   " + participants.get(lane).getName());
-                System.out.println("place " + place + "   lane " + lane + "   " + participants.get(lane).getName() + " send to RE");
-            })).start();
-        }
+        new Thread(() -> Platform.runLater(() ->{
+            switch (place) {
+                case (1):
+                    rootLayoutController.firstPlaceText.setText("Lane " + lane + "   " + participants.get(lane).getName());
+                    break;
+                case (2):
+                    rootLayoutController.secondPlaceText.setText("Lane " + lane + "   " + participants.get(lane).getName());
+                    break;
+                case (3):
+                    rootLayoutController.thirdPlaceText.setText("Lane " + lane + "   " + participants.get(lane).getName());
+                    break;
+                default: break;
+            }
+            System.out.println("place " + place + "   lane " + lane + "   " + participants.get(lane).getName() + " send to RE");
+        })).start();
 
     }
 

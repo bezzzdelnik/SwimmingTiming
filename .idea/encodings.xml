@@ -7,6 +7,7 @@
     <file url="file://$PROJECT_DIR$/model" charset="windows-1251" />
     <file url="file://$PROJECT_DIR$/pic" charset="windows-1251" />
     <file url="file://$PROJECT_DIR$/src" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/src/config.properties" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/consoles/CommandConsumer.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/consoles/CommandsMap.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/consoles/Console.java" charset="UTF-8" />
