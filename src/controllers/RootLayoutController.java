@@ -373,6 +373,17 @@ public class RootLayoutController {
         thirdPlaceText.clear();
     }
 
+    @FXML private void hideAll() {
+        for (int i = 0; i < 10; i++) {
+            controller.sendAnimationPlay("Olympic/swimming", "swimmer_out_" + (i + 1));
+        }
+        firstPlaceText.clear();
+        secondPlaceText.clear();
+        thirdPlaceText.clear();
+    }
+
+
+
     @FXML private void hideRecordLine() {
         controller.sendAnimationPlay("Olympic/swimming", "WR_out");
     }

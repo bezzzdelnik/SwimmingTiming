@@ -172,6 +172,11 @@
                                                         <Button mnemonicParsing="false" onAction="#hideLeaders" text="Убрать лидеров" />
                                                         <Button mnemonicParsing="false" onAction="#showRecordLine" text="Показать линию" />
                                                         <Button mnemonicParsing="false" onAction="#hideRecordLine" text="Убрать линию" />
+                                          <Button mnemonicParsing="false" onAction="#hideAll" text="Убрать всех">
+                                             <HBox.margin>
+                                                <Insets left="500.0" />
+                                             </HBox.margin>
+                                          </Button>
                                                     </children>
                                                 </HBox>
                                                 <HBox spacing="10.0">
