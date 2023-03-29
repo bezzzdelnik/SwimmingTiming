@@ -11,6 +11,7 @@
 <?import javafx.scene.control.TabPane?>
 <?import javafx.scene.control.TextArea?>
 <?import javafx.scene.control.TextField?>
+<?import javafx.scene.control.ToggleGroup?>
 <?import javafx.scene.image.ImageView?>
 <?import javafx.scene.layout.AnchorPane?>
 <?import javafx.scene.layout.BorderPane?>
@@ -142,21 +143,62 @@
                                                         <RadioButton fx:id="radio50m" mnemonicParsing="false" onAction="#setSwimPoolSize" selected="true" text="50м" />
                                                     </children>
                                                 </HBox>
-                                                <HBox spacing="10.0">
+                                                <HBox spacing="150.0">
                                                     <children>
-                                                        <Label text="Дистанция" />
-                                                        <RadioButton fx:id="radio50Distance" mnemonicParsing="false" selected="true" text="50" />
-                                                        <RadioButton fx:id="radio100Distance" mnemonicParsing="false" text="100" />
-                                                        <RadioButton fx:id="radio200Distance" mnemonicParsing="false" text="200" />
-                                                        <RadioButton fx:id="radio400Distance" mnemonicParsing="false" text="400" />
-                                                        <RadioButton fx:id="radio800Distance" mnemonicParsing="false" text="800" />
-                                                        <RadioButton fx:id="radio1500Distance" mnemonicParsing="false" text="1500" />
+                                          <HBox spacing="20.0">
+                                             <children>
+                                                              <Label text="Дистанция">
+                                                   <HBox.margin>
+                                                      <Insets right="10.0" />
+                                                   </HBox.margin>
+                                                </Label>
+                                                              <RadioButton fx:id="radio50Distance" mnemonicParsing="false" selected="true" text="50">
+                                                   <HBox.margin>
+                                                      <Insets />
+                                                   </HBox.margin>
+                                                </RadioButton>
+                                                              <RadioButton fx:id="radio100Distance" mnemonicParsing="false" text="100">
+                                                   <HBox.margin>
+                                                      <Insets />
+                                                   </HBox.margin>
+                                                </RadioButton>
+                                                              <RadioButton fx:id="radio200Distance" mnemonicParsing="false" text="200">
+                                                   <HBox.margin>
+                                                      <Insets />
+                                                   </HBox.margin>
+                                                </RadioButton>
+                                                              <RadioButton fx:id="radio400Distance" mnemonicParsing="false" text="400">
+                                                   <HBox.margin>
+                                                      <Insets />
+                                                   </HBox.margin>
+                                                </RadioButton>
+                                                              <RadioButton fx:id="radio800Distance" mnemonicParsing="false" text="800">
+                                                   <HBox.margin>
+                                                      <Insets />
+                                                   </HBox.margin>
+                                                </RadioButton>
+                                                              <RadioButton fx:id="radio1500Distance" mnemonicParsing="false" text="1500">
+                                                   <HBox.margin>
+                                                      <Insets />
+                                                   </HBox.margin>
+                                                </RadioButton>
+                                             </children>
+                                          </HBox>
+                                          <HBox spacing="20.0">
+                                             <children>
+                                                <RadioButton fx:id="automaticDistanceButton" mnemonicParsing="false" text="Автоматически">
+                                                   <toggleGroup>
+                                                      <ToggleGroup fx:id="distanceSwitch" />
+                                                   </toggleGroup></RadioButton>
+                                                <RadioButton fx:id="manualDistanceButton" mnemonicParsing="false" selected="true" text="Вручную" toggleGroup="$distanceSwitch" />
+                                             </children>
+                                          </HBox>
                                                     </children>
                                                 </HBox>
                                                 <HBox alignment="CENTER_LEFT" spacing="30.0">
                                                     <children>
                                                         <Label alignment="CENTER" text="Таймер" />
-                                                        <Label fx:id="timerLabel" text="00:00:000">
+                                                        <Label fx:id="timerLabel" text="0.0">
                                                             <font>
                                                                 <Font name="Courier New Bold" size="28.0" />
                                                             </font>

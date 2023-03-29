@@ -10,7 +10,6 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.GridPane;
-import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import jssc.SerialPort;
 import jssc.SerialPortEvent;
@@ -50,7 +49,9 @@ public class RootLayoutController {
     @FXML private Button startSerialButton, stopSerialButton;
 
     @FXML private RadioButton radio25m, radio50m;
-    @FXML private RadioButton radio50Distance, radio100Distance, radio200Distance, radio400Distance, radio800Distance, radio1500Distance;
+    @FXML public RadioButton radio50Distance, radio100Distance, radio200Distance, radio400Distance, radio800Distance, radio1500Distance;
+
+    @FXML public RadioButton automaticDistanceButton, manualDistanceButton;
 
     @FXML public Label timerLabel;
     @FXML private Label connectionLabel;
@@ -89,7 +90,7 @@ public class RootLayoutController {
 
     private final ObservableList<String> encodingList = FXCollections.observableArrayList("UTF-8", "Windows-1251");
 
-    private String serialPortName = "COM1";
+    private String serialPortName = "COM3";
     private int serialSpeed = 9600;
     private int serialDataBits = 8;
     private int serialStopBits = 1;
@@ -104,7 +105,7 @@ public class RootLayoutController {
     private void initialize() {
         loadProperties();
 
-        serialPort = new SerialPort(serialPortName);
+        serialPort = new SerialPort(portField.getText());
 
         connectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
         oradConnectionController = new OradController(oradControllerAnchorPane, this);
@@ -113,6 +114,7 @@ public class RootLayoutController {
 
         radio25m.setToggleGroup(swimPool);
         radio50m.setToggleGroup(swimPool);
+
         radio50Distance.setToggleGroup(distanceGroup);
         radio100Distance.setToggleGroup(distanceGroup);
         radio200Distance.setToggleGroup(distanceGroup);
@@ -139,6 +141,7 @@ public class RootLayoutController {
         portField.textProperty().addListener((observable, oldValue, newValue) -> {
             serialPortName = newValue;
             setProperties("serialPort", newValue);
+            serialPort = new SerialPort(newValue);
         });
 
         speedComboBox.getSelectionModel().selectedItemProperty().addListener(
@@ -228,7 +231,8 @@ public class RootLayoutController {
             //Открываем порт
             serialPort.openPort();
             //Выставляем параметры
-            serialPort.setParams(serialSpeed,
+            serialPort.setParams(
+                    serialSpeed,
                     serialDataBits,
                     serialStopBits,
                     serialParity);
@@ -366,6 +370,11 @@ public class RootLayoutController {
         for (int i = 0; i < participants.size(); i++) {
             if (participants.get(i).isShowed()) {
                 controller.sendAnimationPlay("Olympic/swimming", "swimmer_out_" + (i + 1));
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
             }
         }
         firstPlaceText.clear();
@@ -376,6 +385,11 @@ public class RootLayoutController {
     @FXML private void hideAll() {
         for (int i = 0; i < 10; i++) {
             controller.sendAnimationPlay("Olympic/swimming", "swimmer_out_" + (i + 1));
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
         }
         firstPlaceText.clear();
         secondPlaceText.clear();
@@ -398,6 +412,21 @@ public class RootLayoutController {
 
             properties.load(input);
 
+            //RESET
+            reAddress.setText(properties.getProperty(""));
+            reCanvas.setText(properties.getProperty(""));
+
+            portField.setText(properties.getProperty(""));
+            speedComboBox.getSelectionModel().select(properties.getProperty(""));
+            dataBitsComboBox.getSelectionModel().select(properties.getProperty(""));
+            stopBitsComboBox.getSelectionModel().select(properties.getProperty(""));
+            parityComboBox.getSelectionModel().select(properties.getProperty(""));
+            flowControlComboBox.getSelectionModel().select(properties.getProperty(""));
+            encodingComboBox.getSelectionModel().select(properties.getProperty(""));
+
+
+
+            //LOAD
             reAddress.setText(properties.getProperty("reAddress"));
             reCanvas.setText(properties.getProperty("reCanvas"));
 
@@ -408,6 +437,7 @@ public class RootLayoutController {
             parityComboBox.getSelectionModel().select(properties.getProperty("serialParity"));
             flowControlComboBox.getSelectionModel().select(properties.getProperty("serialFlow"));
             encodingComboBox.getSelectionModel().select(properties.getProperty("encoding"));
+
 
         } catch (IOException ex) {
             ex.printStackTrace();

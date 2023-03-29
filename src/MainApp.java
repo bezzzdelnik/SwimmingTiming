@@ -15,7 +15,7 @@ public class MainApp extends Application {
     @Override
     public void start(Stage primaryStage) throws Exception {
         this.primaryStage = primaryStage;
-        this.primaryStage.setTitle("Lynxs Client");
+        this.primaryStage.setTitle("Swimming Client");
 
         initRootLayout();
     }
