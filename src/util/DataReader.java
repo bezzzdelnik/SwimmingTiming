@@ -80,6 +80,8 @@ public class DataReader {
 
                 }
             }
+            System.out.println(output);
+            //System.out.println(oldOutput);
             if (!output.equals(oldOutput)) {
                 readTimer(output);
                 readStartList(output);
@@ -92,7 +94,7 @@ public class DataReader {
 
 
     public void readTimer(String output) {
-        if (output.contains("SOHDC4R02STXBS1")) {
+        if (output.contains("SOHDC4R02STXBS1") || output.contains("SOHDC4R02STXBS")) {
             String timer = output.split("\\s+")[2];
             new Thread(() -> Platform.runLater(() -> rootLayoutController.timerLabel.setText(timer))).start();
             if (timer.equals("0.1")) {
@@ -108,6 +110,10 @@ public class DataReader {
         }
 
         if (output.contains("SOH\u001198STXSTARTEOT")) {
+            resetTable();
+        }
+
+        if (output.contains("SOHDC4L0EOT")) {
             resetTable();
         }
 
