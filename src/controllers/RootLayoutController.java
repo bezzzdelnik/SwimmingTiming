@@ -21,8 +21,18 @@ import orad.retalk2.Retalk2ConnectionController;
 import util.DataReader;
 
 import java.io.*;
+import java.nio.ByteBuffer;
+import java.net.Socket;
 import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class RootLayoutController {
     private Properties properties = new Properties();
@@ -35,6 +45,36 @@ public class RootLayoutController {
 
     private Retalk2ConnectionController controller = null;
 
+    private static final String RE_SCENE = "Olympic/swimming";
+    private static final int LANES_COUNT = 10;
+    private static final long POSITION_DEBOUNCE_MS = 300;
+    private static final double DISTANCE_EXPORT_EPS = 0.05; // meters
+
+    private final Label[] positionLabels = new Label[LANES_COUNT];
+    private final Label[] distanceLabels = new Label[LANES_COUNT];
+    private final Label[] directionLabels = new Label[LANES_COUNT];
+
+    private final double[] lastTotalDistance = new double[LANES_COUNT];
+    private final double[] lastJsonXSegment = new double[LANES_COUNT];
+    private final boolean[] hasLastJsonXSegment = new boolean[LANES_COUNT];
+    private final String[] lastDirection = new String[LANES_COUNT];
+    private final int[] displayedRanks = new int[LANES_COUNT];
+
+    private final double[] lastExportedDistance = new double[LANES_COUNT];
+    private final boolean[] hasExportedDistance = new boolean[LANES_COUNT];
+    private final String[] lastExportedDirection = new String[LANES_COUNT];
+
+    private long lastRankUpdateTs = 0;
+
+    private Socket tcpSocket;
+    private Thread tcpThread;
+    private volatile boolean tcpRunning = false;
+    private final AtomicBoolean uiUpdateQueued = new AtomicBoolean(false);
+
+    private final Pattern laneIdPattern = Pattern.compile("\"lane_id\":(\\d+)");
+    private final Pattern xPattern = Pattern.compile("\"x_m\":([-0-9\\.Ee]+)");
+    private final Pattern directionPattern = Pattern.compile("\"direction\":\"(left|right)\"");
+
     @FXML
     private TextArea logArea;
 
@@ -43,6 +83,12 @@ public class RootLayoutController {
 
     @FXML
     private ComboBox<String> parityComboBox, flowControlComboBox, speedComboBox, dataBitsComboBox, stopBitsComboBox, encodingComboBox;
+
+    @FXML private TextField tcpHostField;
+    @FXML private TextField tcpPortField;
+    @FXML private Button startTcpButton, stopTcpButton;
+    @FXML private Label tcpConnectionLabel;
+    @FXML private ImageView tcpConnectionImageView;
 
     @FXML private ScrollPane scrollPaneSplits;
 
@@ -128,6 +174,30 @@ public class RootLayoutController {
         parityComboBox.setItems(parityList);
         flowControlComboBox.setItems(flowControlList);
         encodingComboBox.setItems(encodingList);
+
+        // TCP defaults (can be overwritten by config.properties)
+        tcpHostField.setText(properties.getProperty("tcpHost", "127.0.0.1"));
+        tcpPortField.setText(properties.getProperty("tcpPort", "9000"));
+        stopTcpButton.setDisable(true);
+        startTcpButton.setDisable(false);
+        tcpConnectionLabel.setText("TCP Disconnected");
+        if (tcpConnectionImageView != null) {
+            tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
+        }
+
+        tcpHostField.textProperty().addListener((observable, oldValue, newValue) -> {
+            if (newValue != null) setProperties("tcpHost", newValue);
+        });
+        tcpPortField.textProperty().addListener((observable, oldValue, newValue) -> {
+            if (newValue == null) return;
+            String v = newValue.trim();
+            if (v.isEmpty()) return;
+            try {
+                Integer.parseInt(v);
+                setProperties("tcpPort", v);
+            } catch (NumberFormatException ignored) {
+            }
+        });
 
 
         reAddress.textProperty().addListener((observable, oldValue, newValue) ->{
@@ -228,20 +298,20 @@ public class RootLayoutController {
     private void startSerial() {
 
         try {
-            //��������� ����
+            // Открываем порт
             serialPort.openPort();
-            //���������� ���������
+            // Настраиваем параметры порта
             serialPort.setParams(
                     serialSpeed,
                     serialDataBits,
                     serialStopBits,
                     serialParity);
-            //�������� ���������� ���������� �������
+            // Настраиваем flow control
             serialPort.setFlowControlMode(serialFlowControl1 |
                     serialFlowControl2);
-            //������������� ����� ������� � �����
+            // Подписываемся на входящие данные
             serialPort.addEventListener(new PortReader(logArea, this), SerialPort.MASK_RXCHAR);
-            //���������� ������ ����������
+            // Обновляем UI при успешном открытии порта
             if (serialPort.isOpened()) {
                 connectionImageView.setImage(new Image(getClass().getResourceAsStream(con)));
                 connectionLabel.setText("Connected");
@@ -257,6 +327,7 @@ public class RootLayoutController {
 
     public void closeApp() {
         stopSerial();
+        stopTcp();
     }
 
     @FXML
@@ -278,7 +349,311 @@ public class RootLayoutController {
 
     }
 
-//��������� ������
+    @FXML
+    private void startTcp() {
+        if (tcpRunning) return;
+
+        String host = tcpHostField.getText() == null ? "127.0.0.1" : tcpHostField.getText().trim();
+        int port;
+        try {
+            port = Integer.parseInt(tcpPortField.getText().trim());
+        } catch (Exception ex) {
+            tcpConnectionLabel.setText("TCP bad port");
+            return;
+        }
+
+        tcpRunning = true;
+        startTcpButton.setDisable(true);
+        stopTcpButton.setDisable(false);
+        tcpConnectionLabel.setText("TCP Connecting...");
+        if (tcpConnectionImageView != null) {
+            tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
+        }
+
+        tcpThread = new Thread(() -> {
+            try {
+                tcpSocket = new Socket(host, port);
+                tcpSocket.setSoTimeout(0);
+
+                Platform.runLater(() -> {
+                    tcpConnectionLabel.setText("TCP Connected");
+                    if (tcpConnectionImageView != null) {
+                        tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(con)));
+                    }
+                });
+
+                InputStream inputStream = tcpSocket.getInputStream();
+                byte[] buffer = new byte[8192];
+                StringBuilder streamBuffer = new StringBuilder();
+
+                while (tcpRunning) {
+                    int read = inputStream.read(buffer);
+                    if (read < 0) break;
+                    if (read == 0) continue;
+
+                    streamBuffer.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
+
+                    // Extract complete JSON objects from the stream (naive brace-depth parser).
+                    while (true) {
+                        int startIdx = streamBuffer.indexOf("{");
+                        if (startIdx < 0) break;
+
+                        int depth = 0;
+                        boolean foundEnd = false;
+                        for (int i = startIdx; i < streamBuffer.length(); i++) {
+                            char ch = streamBuffer.charAt(i);
+                            if (ch == '{') depth++;
+                            else if (ch == '}') depth--;
+                            if (depth == 0) {
+                                String jsonObj = streamBuffer.substring(startIdx, i + 1);
+                                streamBuffer.delete(0, i + 1);
+                                foundEnd = true;
+                                handleTcpJson(jsonObj);
+                                break;
+                            }
+                        }
+
+                        if (!foundEnd) break;
+                    }
+                }
+            } catch (Exception ex) {
+                Platform.runLater(() -> tcpConnectionLabel.setText("TCP error: " + ex.getClass().getSimpleName()));
+            } finally {
+                try {
+                    if (tcpSocket != null) tcpSocket.close();
+                } catch (IOException ignored) {
+                }
+                tcpSocket = null;
+                tcpRunning = false;
+                Platform.runLater(() -> {
+                    startTcpButton.setDisable(false);
+                    stopTcpButton.setDisable(true);
+                    tcpConnectionLabel.setText("TCP Disconnected");
+                    if (tcpConnectionImageView != null) {
+                        tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
+                    }
+                });
+            }
+        }, "tcp-json-reader");
+        tcpThread.start();
+    }
+
+    @FXML
+    private void stopTcp() {
+        tcpRunning = false;
+        if (tcpThread != null) {
+            tcpThread.interrupt();
+            tcpThread = null;
+        }
+        if (tcpSocket != null) {
+            try {
+                tcpSocket.close();
+            } catch (IOException ignored) {
+            }
+            tcpSocket = null;
+        }
+
+        if (startTcpButton != null && stopTcpButton != null) {
+            startTcpButton.setDisable(false);
+            stopTcpButton.setDisable(true);
+        }
+        if (tcpConnectionLabel != null) {
+            tcpConnectionLabel.setText("TCP Disconnected");
+        }
+        if (tcpConnectionImageView != null) {
+            tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
+        }
+    }
+
+    private void handleTcpJson(String jsonObj) {
+        // Remove spaces/new lines as requested (this also keeps parsing simpler).
+        String cleaned = jsonObj.replaceAll("[\\s\\r\\n\\t]+", "");
+
+        boolean[] seenLane = new boolean[LANES_COUNT];
+        double[] frameX = new double[LANES_COUNT];
+        String[] frameDirections = new String[LANES_COUNT];
+
+        int swimmersStart = cleaned.indexOf("\"swimmers\":[");
+        if (swimmersStart < 0) return;
+
+        int i = swimmersStart + "\"swimmers\":[".length();
+        while (i < cleaned.length()) {
+            char c = cleaned.charAt(i);
+            if (c == '{') {
+                int braceDepth = 0;
+                int startObj = i;
+                while (i < cleaned.length()) {
+                    char ch = cleaned.charAt(i);
+                    if (ch == '{') braceDepth++;
+                    else if (ch == '}') braceDepth--;
+                    i++;
+                    if (braceDepth == 0) {
+                        String swimmerObj = cleaned.substring(startObj, i);
+
+                        Integer laneId = extractInt(laneIdPattern, swimmerObj);
+                        Double xVal = extractDouble(xPattern, swimmerObj);
+
+                        if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xVal != null) {
+                            seenLane[laneId] = true;
+                            frameX[laneId] = xVal;
+                            frameDirections[laneId] = extractString(directionPattern, swimmerObj);
+                        }
+                        break;
+                    }
+                }
+            } else if (c == ']') {
+                break;
+            } else {
+                i++;
+            }
+        }
+
+        long now = System.currentTimeMillis();
+
+        // Update state for lanes present in this frame.
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            if (!seenLane[lane]) continue;
+
+            double xSeg = frameX[lane];
+            String dir = frameDirections[lane];
+
+            if (dir == null) {
+                if (hasLastJsonXSegment[lane]) {
+                    dir = xSeg >= lastJsonXSegment[lane] ? "right" : "left";
+                } else {
+                    dir = lastDirection[lane];
+                }
+            }
+
+            lastJsonXSegment[lane] = xSeg;
+            hasLastJsonXSegment[lane] = true;
+            lastDirection[lane] = dir;
+
+            Participant p = participants.size() > lane ? participants.get(lane) : null;
+            // "Пройденные сплиты" = сколько полей в таблице заполнено (а не только индекс splitCount).
+            int passedSplits = 0;
+            if (p != null) {
+                for (Split s : p.getSplits()) {
+                    if (s.getSpl() != null && !s.getSpl().isEmpty()) {
+                        passedSplits++;
+                    }
+                }
+            }
+
+            // x_m интерпретируем как позицию внутри текущего отрезка бассейна [0..poolLength].
+            double segLen = swimPoolSize;
+            double segPos = Math.max(0, Math.min(segLen, xSeg));
+
+            // Если количество сплитов чётное (включая 0) — считаем "по ходу" x_m.
+            // Если нечётное — пловец уже на обратном отрезке, поэтому добавляем (poolLen - x_m).
+            double base = passedSplits * segLen;
+            double total = (passedSplits % 2 == 0) ? (base + segPos) : (base + (segLen - segPos));
+
+            total = Math.max(0, Math.min(distance, total)); // avoid overshoot outside selected race distance
+            lastTotalDistance[lane] = total;
+        }
+
+        // Rank by distance: leader has larger distance.
+        Integer[] idx = new Integer[LANES_COUNT];
+        for (int lane = 0; lane < LANES_COUNT; lane++) idx[lane] = lane;
+
+        Arrays.sort(idx, (a, b) -> {
+            int cmp = Double.compare(lastTotalDistance[b], lastTotalDistance[a]);
+            if (cmp != 0) return cmp;
+            return Integer.compare(a, b); // stable tie-break by lane id
+        });
+
+        int[] newRanks = new int[LANES_COUNT];
+        for (int rank = 1; rank <= LANES_COUNT; rank++) {
+            newRanks[idx[rank - 1]] = rank;
+        }
+
+        boolean rankChanged = false;
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            if (newRanks[lane] != displayedRanks[lane]) {
+                rankChanged = true;
+                break;
+            }
+        }
+
+        boolean allowRankUpdate = rankChanged && (now - lastRankUpdateTs >= POSITION_DEBOUNCE_MS);
+        if (allowRankUpdate) {
+            System.arraycopy(newRanks, 0, displayedRanks, 0, LANES_COUNT);
+            lastRankUpdateTs = now;
+        }
+
+        // Send exports to RE (if connected).
+        if (controller != null) {
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                String dir = lastDirection[lane] == null ? "" : lastDirection[lane];
+                String distValue = String.format(Locale.US, "%.3f", lastTotalDistance[lane]);
+
+                boolean needSendDist = !hasExportedDistance[lane] || Math.abs(lastTotalDistance[lane] - lastExportedDistance[lane]) > DISTANCE_EXPORT_EPS;
+                boolean needSendDir = lastExportedDirection[lane] == null ? !dir.isEmpty() : !lastExportedDirection[lane].equals(dir);
+
+                if (needSendDist) {
+                    controller.sendSetExport(RE_SCENE, "distance_lane_" + lane, distValue);
+                    lastExportedDistance[lane] = lastTotalDistance[lane];
+                    hasExportedDistance[lane] = true;
+                }
+
+                if (needSendDir) {
+                    controller.sendSetExport(RE_SCENE, "directin_lane_" + lane, dir);
+                    lastExportedDirection[lane] = dir;
+                }
+
+                if (allowRankUpdate) {
+                    controller.sendSetExport(RE_SCENE, "position_lane_" + lane, String.valueOf(displayedRanks[lane]));
+                }
+            }
+        }
+
+        // Update UI (coalesced to avoid spamming Platform.runLater).
+        if (uiUpdateQueued.compareAndSet(false, true)) {
+            Platform.runLater(() -> {
+                try {
+                    updateSplitUiFromState();
+                } finally {
+                    uiUpdateQueued.set(false);
+                }
+            });
+        }
+    }
+
+    private void updateSplitUiFromState() {
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            if (positionLabels[lane] != null) {
+                int rank = displayedRanks[lane];
+                positionLabels[lane].setText(rank > 0 ? String.valueOf(rank) : "");
+            }
+            if (distanceLabels[lane] != null) {
+                distanceLabels[lane].setText(String.format(Locale.US, "%.2f", lastTotalDistance[lane]));
+            }
+            if (directionLabels[lane] != null) {
+                directionLabels[lane].setText(lastDirection[lane] == null ? "" : lastDirection[lane]);
+            }
+        }
+    }
+
+    private Integer extractInt(Pattern pattern, String input) {
+        Matcher m = pattern.matcher(input);
+        if (m.find()) return Integer.parseInt(m.group(1));
+        return null;
+    }
+
+    private Double extractDouble(Pattern pattern, String input) {
+        Matcher m = pattern.matcher(input);
+        if (m.find()) return Double.parseDouble(m.group(1));
+        return null;
+    }
+
+    private String extractString(Pattern pattern, String input) {
+        Matcher m = pattern.matcher(input);
+        if (m.find()) return m.group(1);
+        return null;
+    }
+
+// Настройка размера бассейна
     @FXML private void setSwimPoolSize(){
         if (radio25m.isSelected()) {
             swimPoolSize = 25;
@@ -302,24 +677,60 @@ public class RootLayoutController {
         splits.setHgap(10);
         participants.clear();
 
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            positionLabels[lane] = null;
+            distanceLabels[lane] = null;
+            directionLabels[lane] = null;
+
+            lastTotalDistance[lane] = 0;
+            lastJsonXSegment[lane] = 0;
+            hasLastJsonXSegment[lane] = false;
+            lastDirection[lane] = null;
+
+            displayedRanks[lane] = 0;
+            lastExportedDistance[lane] = 0;
+            hasExportedDistance[lane] = false;
+            lastExportedDirection[lane] = null;
+        }
+        lastRankUpdateTs = 0;
+
         firstPlaceText.clear();
         secondPlaceText.clear();
         thirdPlaceText.clear();
 
         int columns = distance / swimPoolSize;
-        Label nameLabel = new Label("���");
-        Label laneLabel = new Label("�������");
+        Label nameLabel = new Label("Имя");
+        Label laneLabel = new Label("Дорожка");
         GridPane.setHalignment(nameLabel, HPos.CENTER);
         splits.add(nameLabel, 1, 0);
         splits.add(laneLabel, 0, 0);
-        for (int column = 2; column < (columns + 2); column++) {
-            Label newDistanceLabel = new Label((column - 1) * swimPoolSize + "�");
+
+        // Extra columns between athlete names and split columns.
+        int positionCol = 2;
+        int distanceCol = 3;
+        int directionCol = 4;
+        int splitStartColumn = 5;
+
+        Label positionHeader = new Label("Pos");
+        Label distanceHeader = new Label("Dist (m)");
+        Label directionHeader = new Label("Dir");
+        GridPane.setHalignment(positionHeader, HPos.CENTER);
+        GridPane.setHalignment(distanceHeader, HPos.CENTER);
+        GridPane.setHalignment(directionHeader, HPos.CENTER);
+        splits.add(positionHeader, positionCol, 0);
+        splits.add(distanceHeader, distanceCol, 0);
+        splits.add(directionHeader, directionCol, 0);
+
+        for (int splitIdx = 0; splitIdx < columns; splitIdx++) {
+            int uiCol = splitStartColumn + splitIdx;
+            Label newDistanceLabel = new Label((splitIdx + 1) * swimPoolSize + "м");
             GridPane.setHalignment(newDistanceLabel, HPos.CENTER);
-            splits.add(newDistanceLabel, column, 0);
+            splits.add(newDistanceLabel, uiCol, 0);
         }
+
         for (int row = 1; row < 11; row++) {
             Participant newParticipant = new Participant();
-            newParticipant.setName(row + " " + "��� �������");
+            newParticipant.setName(row + " " + "Пловец");
             participants.add(newParticipant);
             Label newNameLabel = new Label(newParticipant.getName());
             newParticipant.nameProperty().addListener((observable, oldValue, newValue) ->
@@ -331,16 +742,18 @@ public class RootLayoutController {
             GridPane.setHalignment(laneLbl, HPos.CENTER);
             laneLbl.setText(String.valueOf(row - 1));
             splits.add(laneLbl, 0, row);
-            for (int column = 2; column < (columns + 2); column++) {
+
+            for (int splitIdx = 0; splitIdx < columns; splitIdx++) {
                 TextField newTextField = new TextField();
                 newTextField.setPrefWidth(70);
                 int finalRow = row;
-                int finalColumn = column;
-                participants.get(finalRow - 1).getSplits().add((finalColumn - 2), new Split());
-                newTextField.setText(participants.get(finalRow - 1).getSplits().get((finalColumn - 2)).getSpl());
+                int finalSplitIdx = splitIdx;
+                int uiCol = splitStartColumn + splitIdx;
+                participants.get(finalRow - 1).getSplits().add(finalSplitIdx, new Split());
+                newTextField.setText(participants.get(finalRow - 1).getSplits().get(finalSplitIdx).getSpl());
                 newTextField.textProperty().addListener((observable, oldValue, newValue) ->
-                        participants.get(finalRow - 1).getSplits().get(finalColumn - 2).setSpl(newValue));
-                participants.get(finalRow - 1).getSplits().get(finalColumn - 2).splProperty().addListener(
+                        participants.get(finalRow - 1).getSplits().get(finalSplitIdx).setSpl(newValue));
+                participants.get(finalRow - 1).getSplits().get(finalSplitIdx).splProperty().addListener(
                         (observable, oldValue, newValue) -> {
                             if (oldValue.equals("")) {
                                 newTextField.setText(newValue);
@@ -351,9 +764,22 @@ public class RootLayoutController {
                             }
 
                         });
-                splits.add(newTextField, column, row);
+                splits.add(newTextField, uiCol, row);
 
             }
+
+            int laneIdx = row - 1;
+            positionLabels[laneIdx] = new Label("");
+            distanceLabels[laneIdx] = new Label("");
+            directionLabels[laneIdx] = new Label("");
+
+            GridPane.setHalignment(positionLabels[laneIdx], HPos.CENTER);
+            GridPane.setHalignment(distanceLabels[laneIdx], HPos.CENTER);
+            GridPane.setHalignment(directionLabels[laneIdx], HPos.CENTER);
+
+            splits.add(positionLabels[laneIdx], positionCol, row);
+            splits.add(distanceLabels[laneIdx], distanceCol, row);
+            splits.add(directionLabels[laneIdx], directionCol, row);
         }
         scrollPaneSplits.setContent(splits);
     }
@@ -459,6 +885,22 @@ public class RootLayoutController {
         }
     }
 
+    // Decode incoming bytes from Serial:
+    // - if they are valid UTF-8 => decode as UTF-8
+    // - otherwise => fallback to Windows-1251
+    //
+    // This avoids mojibake like "Р‘РµСЂСѓ..." when the device sends UTF-8 bytes.
+    private String decodeAutoCyrillic(byte[] bytes) {
+        try {
+            CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT);
+            return decoder.decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (Exception ignored) {
+            return new String(bytes, Charset.forName("Windows-1251"));
+        }
+    }
+
     private class PortReader implements SerialPortEventListener {
         TextArea logArea;
         String filePath;
@@ -476,7 +918,7 @@ public class RootLayoutController {
                 try {
                     byte[] bytes = serialPort.readBytes(event.getEventValue());
                     //String data = serialPort.readString(event.getEventValue());
-                    String data = new String(bytes, Charset.forName(encodingComboBox.getSelectionModel().getSelectedItem()));
+                    String data = decodeAutoCyrillic(bytes);
 
 
                     new Thread(() -> Platform.runLater(() -> logArea.setText(data))).start();

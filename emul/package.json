@@ -1,0 +1,11 @@
+{
+  "name": "swim-serial-replay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Replay SwimmingTiming serial logs into a COM port",
+  "type": "commonjs",
+  "dependencies": {
+    "serialport": "^12.0.0"
+  }
+}
+

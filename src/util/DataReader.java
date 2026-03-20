@@ -17,6 +17,7 @@ public class DataReader {
     static String DC1 = "\u0011";
 
     static String startList = "SOH\u001198STXSLH";
+    static String startList2 = "SOH98STXSLH";
 
 
     private static String bf;
@@ -109,7 +110,7 @@ public class DataReader {
             automaticSwitchDistance(output);
         }
 
-        if (output.contains("SOH\u001198STXSTARTEOT")) {
+        if (output.contains("SOH\u001198STXSTARTEOT") || output.contains("SOH98STXSTARTEOT")) {
             resetTable();
         }
 
@@ -117,7 +118,7 @@ public class DataReader {
             resetTable();
         }
 
-        if (output.contains(startList)) {
+        if (output.contains(startList) || output.contains(startList2)) {
             new Thread(() -> Platform.runLater(() -> {
                 participants.get(Integer.parseInt(output.replaceAll("\\|", "").split("\\s+")[2])).
                         setName(output.replaceAll("\\||EOT", "").split("\\s+", 5)[4]);

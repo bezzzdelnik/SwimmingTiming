@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="Encoding" addBOMForNewFiles="with BOM">
-    <file url="file://$PROJECT_DIR$/META-INF" charset="windows-1251" />
-    <file url="file://$PROJECT_DIR$/controllers" charset="windows-1251" />
-    <file url="file://$PROJECT_DIR$/lib" charset="windows-1251" />
-    <file url="file://$PROJECT_DIR$/model" charset="windows-1251" />
-    <file url="file://$PROJECT_DIR$/pic" charset="windows-1251" />
-    <file url="file://$PROJECT_DIR$/src" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/META-INF" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/controllers" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/lib" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/model" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/pic" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/config.properties" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/consoles/CommandConsumer.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/consoles/CommandsMap.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/consoles/Console.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/consoles/ConsolePrinter.java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/src/controllers/OradController.java" charset="windows-1251" />
-    <file url="file://$PROJECT_DIR$/src/controllers/RootLayoutController.java" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/src/controllers/OradController.java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/controllers/RootLayoutController.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/orad/AbstractREConnectionController.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/orad/IREConnectionController.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/orad/IREConnectionModel.java" charset="UTF-8" />
@@ -49,9 +49,9 @@
     <file url="file://$PROJECT_DIR$/src/orad/retalk2/Retalk2Settings.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/util/CommonUtils.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/util/Constants.java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/src/util/DataReader.java" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/src/util/DataReader.java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/util/MessageBuilder.java" charset="UTF-8" />
-    <file url="file://$PROJECT_DIR$/util" charset="windows-1251" />
+    <file url="file://$PROJECT_DIR$/util" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/util/DataReader.java" charset="UTF-8" />
     <file url="PROJECT" charset="UTF-8" />
   </component>
