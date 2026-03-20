@@ -31,7 +31,7 @@ public class MainApp extends Application {
             // Отображаем сцену, содержащую корневой макет.
             Scene scene = new Scene(rootLayout, 1920, 600);
             primaryStage.setScene(scene);
-            primaryStage.minHeightProperty().set(600);
+            primaryStage.minHeightProperty().set(800);
             primaryStage.minWidthProperty().set(1920);
             primaryStage.maxHeightProperty().set(1080);
             primaryStage.maxWidthProperty().set(1920);
