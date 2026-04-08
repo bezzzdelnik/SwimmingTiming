@@ -219,8 +219,10 @@ public class DataReader {
 
     private void showLeaders(int lane, int place) {
         //rootLayoutController.getController().sendSetExport("Olympic/swimming", "_numbers_mode", "0");
-        rootLayoutController.getController().sendSetExport("Olympic/swimming", "number_" + (lane + 1), String.valueOf(place));
-        rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + (lane + 1));
+        if (rootLayoutController.getController() != null) {
+            rootLayoutController.getController().sendSetExport("Olympic/swimming", "number_" + (lane + 1), String.valueOf(place));
+            rootLayoutController.getController().sendAnimationPlay("Olympic/swimming", "swimmer_in_" + (lane + 1));
+        }
         participants.get(lane).setIsShowed(true);
         new Thread(() -> Platform.runLater(() ->{
             switch (place) {

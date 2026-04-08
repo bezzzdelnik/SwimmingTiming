@@ -22,6 +22,7 @@ import util.DataReader;
 
 import java.io.*;
 import java.nio.ByteBuffer;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
@@ -30,6 +31,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Properties;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -52,6 +58,7 @@ public class RootLayoutController {
 
     private final Label[] positionLabels = new Label[LANES_COUNT];
     private final Label[] distanceLabels = new Label[LANES_COUNT];
+    private final Label[] gpLabels = new Label[LANES_COUNT];
     private final Label[] directionLabels = new Label[LANES_COUNT];
 
     private final double[] lastTotalDistance = new double[LANES_COUNT];
@@ -74,6 +81,13 @@ public class RootLayoutController {
     private final Pattern laneIdPattern = Pattern.compile("\"lane_id\":(\\d+)");
     private final Pattern xPattern = Pattern.compile("\"x_m\":([-0-9\\.Ee]+)");
     private final Pattern directionPattern = Pattern.compile("\"direction\":\"(left|right)\"");
+    private ServerSocket splitsTcpServerSocket;
+    private Thread splitsTcpServerThread;
+    private volatile boolean splitsTcpServerRunning = false;
+    private final List<Socket> splitsTcpClients = new ArrayList<>();
+    private final Object splitsStateLock = new Object();
+    private static final int SPLITS_TCP_BROADCAST_HZ = 25;
+    private ScheduledExecutorService splitsTcpBroadcastExecutor;
 
     @FXML
     private TextArea logArea;
@@ -89,6 +103,9 @@ public class RootLayoutController {
     @FXML private Button startTcpButton, stopTcpButton;
     @FXML private Label tcpConnectionLabel;
     @FXML private ImageView tcpConnectionImageView;
+    @FXML private TextField splitsTcpServerPortField;
+    @FXML private Button startSplitsTcpServerButton, stopSplitsTcpServerButton;
+    @FXML private Label splitsTcpServerStatusLabel, splitsTcpClientsCountLabel;
 
     @FXML private ScrollPane scrollPaneSplits;
 
@@ -198,6 +215,25 @@ public class RootLayoutController {
             } catch (NumberFormatException ignored) {
             }
         });
+
+        if (splitsTcpServerPortField != null) {
+            splitsTcpServerPortField.setText(properties.getProperty("splitsTcpServerPort", "9100"));
+            splitsTcpServerPortField.textProperty().addListener((observable, oldValue, newValue) -> {
+                if (newValue == null) return;
+                String v = newValue.trim();
+                if (v.isEmpty()) return;
+                try {
+                    Integer.parseInt(v);
+                    setProperties("splitsTcpServerPort", v);
+                } catch (NumberFormatException ignored) {
+                }
+            });
+        }
+        if (startSplitsTcpServerButton != null && stopSplitsTcpServerButton != null) {
+            startSplitsTcpServerButton.setDisable(false);
+            stopSplitsTcpServerButton.setDisable(true);
+        }
+        updateSplitsTcpServerUi("Stopped");
 
 
         reAddress.textProperty().addListener((observable, oldValue, newValue) ->{
@@ -328,6 +364,7 @@ public class RootLayoutController {
     public void closeApp() {
         stopSerial();
         stopTcp();
+        stopSplitsTcpServer();
     }
 
     @FXML
@@ -465,6 +502,234 @@ public class RootLayoutController {
         }
     }
 
+    @FXML
+    private void startSplitsTcpServer() {
+        if (splitsTcpServerRunning) return;
+        int port;
+        try {
+            port = Integer.parseInt(splitsTcpServerPortField.getText().trim());
+        } catch (Exception ex) {
+            updateSplitsTcpServerUi("Bad port");
+            return;
+        }
+
+        splitsTcpServerRunning = true;
+        if (startSplitsTcpServerButton != null) startSplitsTcpServerButton.setDisable(true);
+        if (stopSplitsTcpServerButton != null) stopSplitsTcpServerButton.setDisable(false);
+        updateSplitsTcpServerUi("Starting...");
+
+        splitsTcpServerThread = new Thread(() -> {
+            try {
+                splitsTcpServerSocket = new ServerSocket(port);
+                Platform.runLater(this::startSplitsTcpBroadcastScheduler);
+                updateSplitsTcpServerUi("Listening on " + port);
+                while (splitsTcpServerRunning) {
+                    Socket client = splitsTcpServerSocket.accept();
+                    client.setTcpNoDelay(true);
+                    synchronized (splitsTcpClients) {
+                        splitsTcpClients.add(client);
+                    }
+                    updateSplitsTcpServerUi("Listening on " + port);
+                }
+            } catch (IOException ex) {
+                if (splitsTcpServerRunning) {
+                    updateSplitsTcpServerUi("Server error");
+                }
+            } finally {
+                splitsTcpServerRunning = false;
+                closeSplitsTcpServerResources();
+                Platform.runLater(() -> {
+                    if (startSplitsTcpServerButton != null) startSplitsTcpServerButton.setDisable(false);
+                    if (stopSplitsTcpServerButton != null) stopSplitsTcpServerButton.setDisable(true);
+                    if (splitsTcpServerStatusLabel != null && !"Server error".equals(splitsTcpServerStatusLabel.getText())) {
+                        splitsTcpServerStatusLabel.setText("Stopped");
+                    }
+                    if (splitsTcpClientsCountLabel != null) splitsTcpClientsCountLabel.setText("0");
+                });
+            }
+        }, "splits-tcp-server");
+        splitsTcpServerThread.start();
+    }
+
+    @FXML
+    private void stopSplitsTcpServer() {
+        splitsTcpServerRunning = false;
+        if (splitsTcpServerThread != null) {
+            splitsTcpServerThread.interrupt();
+            splitsTcpServerThread = null;
+        }
+        closeSplitsTcpServerResources();
+        if (startSplitsTcpServerButton != null) startSplitsTcpServerButton.setDisable(false);
+        if (stopSplitsTcpServerButton != null) stopSplitsTcpServerButton.setDisable(true);
+        updateSplitsTcpServerUi("Stopped");
+    }
+
+    private void closeSplitsTcpServerResources() {
+        stopSplitsTcpBroadcastScheduler();
+        if (splitsTcpServerSocket != null) {
+            try {
+                splitsTcpServerSocket.close();
+            } catch (IOException ignored) {
+            }
+            splitsTcpServerSocket = null;
+        }
+        synchronized (splitsTcpClients) {
+            for (Socket client : splitsTcpClients) {
+                try {
+                    client.close();
+                } catch (IOException ignored) {
+                }
+            }
+            splitsTcpClients.clear();
+        }
+    }
+
+    private void updateSplitsTcpServerUi(String status) {
+        Platform.runLater(() -> {
+            if (splitsTcpServerStatusLabel != null) {
+                splitsTcpServerStatusLabel.setText(status);
+            }
+            if (splitsTcpClientsCountLabel != null) {
+                synchronized (splitsTcpClients) {
+                    splitsTcpClientsCountLabel.setText(String.valueOf(splitsTcpClients.size()));
+                }
+            }
+        });
+    }
+
+    private void broadcastSplitsAsJson() {
+        String payload = buildSplitsJson() + "\n";
+        byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+
+        synchronized (splitsTcpClients) {
+            List<Socket> dead = new ArrayList<>();
+            for (Socket client : splitsTcpClients) {
+                try {
+                    OutputStream os = client.getOutputStream();
+                    os.write(bytes);
+                    os.flush();
+                } catch (IOException ex) {
+                    dead.add(client);
+                }
+            }
+            for (Socket client : dead) {
+                try {
+                    client.close();
+                } catch (IOException ignored) {
+                }
+                splitsTcpClients.remove(client);
+            }
+        }
+        updateSplitsTcpServerUi(splitsTcpServerRunning ? "Listening" : "Stopped");
+    }
+
+    private void startSplitsTcpBroadcastScheduler() {
+        if (!splitsTcpServerRunning) return;
+        stopSplitsTcpBroadcastScheduler();
+        splitsTcpBroadcastExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "splits-tcp-broadcast");
+            t.setDaemon(true);
+            return t;
+        });
+        long periodMs = Math.max(1L, 1000L / SPLITS_TCP_BROADCAST_HZ);
+        splitsTcpBroadcastExecutor.scheduleAtFixedRate(() -> {
+            if (!splitsTcpServerRunning) return;
+            synchronized (splitsTcpClients) {
+                if (splitsTcpClients.isEmpty()) return;
+            }
+            Platform.runLater(() -> {
+                if (!splitsTcpServerRunning) return;
+                broadcastSplitsAsJson();
+            });
+        }, 0, periodMs, TimeUnit.MILLISECONDS);
+    }
+
+    private void stopSplitsTcpBroadcastScheduler() {
+        if (splitsTcpBroadcastExecutor == null) return;
+        splitsTcpBroadcastExecutor.shutdown();
+        try {
+            if (!splitsTcpBroadcastExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                splitsTcpBroadcastExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            splitsTcpBroadcastExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        splitsTcpBroadcastExecutor = null;
+    }
+
+    /** Rank 1 = leader (max distance); ties broken by lower lane index. */
+    private int[] computeRanksByTotalDistance() {
+        Integer[] idx = new Integer[LANES_COUNT];
+        for (int lane = 0; lane < LANES_COUNT; lane++) idx[lane] = lane;
+        Arrays.sort(idx, (a, b) -> {
+            int cmp = Double.compare(lastTotalDistance[b], lastTotalDistance[a]);
+            if (cmp != 0) return cmp;
+            return Integer.compare(a, b);
+        });
+        int[] ranks = new int[LANES_COUNT];
+        for (int rank = 1; rank <= LANES_COUNT; rank++) {
+            ranks[idx[rank - 1]] = rank;
+        }
+        return ranks;
+    }
+
+    private String buildSplitsJson() {
+        synchronized (splitsStateLock) {
+            double leaderDist = 0;
+            for (int l = 0; l < LANES_COUNT; l++) {
+                leaderDist = Math.max(leaderDist, lastTotalDistance[l]);
+            }
+            int[] ranks = computeRanksByTotalDistance();
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("{");
+            for (int lane = 0; lane < participants.size(); lane++) {
+                Participant p = participants.get(lane);
+                if (lane > 0) sb.append(",");
+                sb.append("\"").append(lane).append("\":{");
+                sb.append("\"splits\":[");
+
+                List<Split> laneSplits = p.getSplits();
+                boolean first = true;
+                boolean laneFinished = false;
+                if (!laneSplits.isEmpty()) {
+                    String lastTime = laneSplits.get(laneSplits.size() - 1).getSpl();
+                    laneFinished = lastTime != null && !lastTime.isEmpty();
+                }
+
+                for (int i = 0; i < laneSplits.size(); i++) {
+                    String t = laneSplits.get(i).getSpl();
+                    if (t == null) t = "";
+
+                    if (!first) sb.append(",");
+                    first = false;
+
+                    boolean isFinal = i == laneSplits.size() - 1 && laneFinished;
+                    sb.append("{\"time\":\"")
+                            .append(escapeJson(t))
+                            .append("\",\"final\":")
+                            .append(isFinal ? "true" : "false")
+                            .append("}");
+                }
+                sb.append("]");
+                double gp = leaderDist - lastTotalDistance[lane];
+                sb.append(",\"line_pos\":").append(ranks[lane])
+                        .append(",\"line_real_x\":")
+                        .append(String.format(Locale.US, "%.2f", lastTotalDistance[lane]))
+                        .append(",\"line_gp\":")
+                        .append(String.format(Locale.US, "%.2f", gp))
+                        .append("}");
+            }
+            sb.append("}");
+            return sb.toString();
+        }
+    }
+
+    private String escapeJson(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
     private void handleTcpJson(String jsonObj) {
         // Remove spaces/new lines as requested (this also keeps parsing simpler).
         String cleaned = jsonObj.replaceAll("[\\s\\r\\n\\t]+", "");
@@ -510,100 +775,89 @@ public class RootLayoutController {
 
         long now = System.currentTimeMillis();
 
-        // Update state for lanes present in this frame.
-        for (int lane = 0; lane < LANES_COUNT; lane++) {
-            if (!seenLane[lane]) continue;
+        synchronized (splitsStateLock) {
+            // Update state for lanes present in this frame.
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                if (!seenLane[lane]) continue;
 
-            double xSeg = frameX[lane];
-            String dir = frameDirections[lane];
+                double xSeg = frameX[lane];
+                String dir = frameDirections[lane];
 
-            if (dir == null) {
-                if (hasLastJsonXSegment[lane]) {
-                    dir = xSeg >= lastJsonXSegment[lane] ? "right" : "left";
-                } else {
-                    dir = lastDirection[lane];
-                }
-            }
-
-            lastJsonXSegment[lane] = xSeg;
-            hasLastJsonXSegment[lane] = true;
-            lastDirection[lane] = dir;
-
-            Participant p = participants.size() > lane ? participants.get(lane) : null;
-            // "Пройденные сплиты" = сколько полей в таблице заполнено (а не только индекс splitCount).
-            int passedSplits = 0;
-            if (p != null) {
-                for (Split s : p.getSplits()) {
-                    if (s.getSpl() != null && !s.getSpl().isEmpty()) {
-                        passedSplits++;
+                if (dir == null) {
+                    if (hasLastJsonXSegment[lane]) {
+                        dir = xSeg >= lastJsonXSegment[lane] ? "right" : "left";
+                    } else {
+                        dir = lastDirection[lane];
                     }
                 }
+
+                lastJsonXSegment[lane] = xSeg;
+                hasLastJsonXSegment[lane] = true;
+                lastDirection[lane] = dir;
+
+                Participant p = participants.size() > lane ? participants.get(lane) : null;
+                // "Пройденные сплиты" = сколько полей в таблице заполнено (а не только индекс splitCount).
+                int passedSplits = 0;
+                if (p != null) {
+                    for (Split s : p.getSplits()) {
+                        if (s.getSpl() != null && !s.getSpl().isEmpty()) {
+                            passedSplits++;
+                        }
+                    }
+                }
+
+                // x_m интерпретируем как позицию внутри текущего отрезка бассейна [0..poolLength].
+                double segLen = swimPoolSize;
+                double segPos = Math.max(0, Math.min(segLen, xSeg));
+
+                // Если количество сплитов чётное (включая 0) — считаем "по ходу" x_m.
+                // Если нечётное — пловец уже на обратном отрезке, поэтому добавляем (poolLen - x_m).
+                double base = passedSplits * segLen;
+                double total = (passedSplits % 2 == 0) ? (base + segPos) : (base + (segLen - segPos));
+
+                total = Math.max(0, Math.min(distance, total)); // avoid overshoot outside selected race distance
+                lastTotalDistance[lane] = total;
             }
 
-            // x_m интерпретируем как позицию внутри текущего отрезка бассейна [0..poolLength].
-            double segLen = swimPoolSize;
-            double segPos = Math.max(0, Math.min(segLen, xSeg));
+            int[] newRanks = computeRanksByTotalDistance();
 
-            // Если количество сплитов чётное (включая 0) — считаем "по ходу" x_m.
-            // Если нечётное — пловец уже на обратном отрезке, поэтому добавляем (poolLen - x_m).
-            double base = passedSplits * segLen;
-            double total = (passedSplits % 2 == 0) ? (base + segPos) : (base + (segLen - segPos));
-
-            total = Math.max(0, Math.min(distance, total)); // avoid overshoot outside selected race distance
-            lastTotalDistance[lane] = total;
-        }
-
-        // Rank by distance: leader has larger distance.
-        Integer[] idx = new Integer[LANES_COUNT];
-        for (int lane = 0; lane < LANES_COUNT; lane++) idx[lane] = lane;
-
-        Arrays.sort(idx, (a, b) -> {
-            int cmp = Double.compare(lastTotalDistance[b], lastTotalDistance[a]);
-            if (cmp != 0) return cmp;
-            return Integer.compare(a, b); // stable tie-break by lane id
-        });
-
-        int[] newRanks = new int[LANES_COUNT];
-        for (int rank = 1; rank <= LANES_COUNT; rank++) {
-            newRanks[idx[rank - 1]] = rank;
-        }
-
-        boolean rankChanged = false;
-        for (int lane = 0; lane < LANES_COUNT; lane++) {
-            if (newRanks[lane] != displayedRanks[lane]) {
-                rankChanged = true;
-                break;
-            }
-        }
-
-        boolean allowRankUpdate = rankChanged && (now - lastRankUpdateTs >= POSITION_DEBOUNCE_MS);
-        if (allowRankUpdate) {
-            System.arraycopy(newRanks, 0, displayedRanks, 0, LANES_COUNT);
-            lastRankUpdateTs = now;
-        }
-
-        // Send exports to RE (if connected).
-        if (controller != null) {
+            boolean rankChanged = false;
             for (int lane = 0; lane < LANES_COUNT; lane++) {
-                String dir = lastDirection[lane] == null ? "" : lastDirection[lane];
-                String distValue = String.format(Locale.US, "%.3f", lastTotalDistance[lane]);
-
-                boolean needSendDist = !hasExportedDistance[lane] || Math.abs(lastTotalDistance[lane] - lastExportedDistance[lane]) > DISTANCE_EXPORT_EPS;
-                boolean needSendDir = lastExportedDirection[lane] == null ? !dir.isEmpty() : !lastExportedDirection[lane].equals(dir);
-
-                if (needSendDist) {
-                    controller.sendSetExport(RE_SCENE, "distance_lane_" + lane, distValue);
-                    lastExportedDistance[lane] = lastTotalDistance[lane];
-                    hasExportedDistance[lane] = true;
+                if (newRanks[lane] != displayedRanks[lane]) {
+                    rankChanged = true;
+                    break;
                 }
+            }
 
-                if (needSendDir) {
-                    controller.sendSetExport(RE_SCENE, "directin_lane_" + lane, dir);
-                    lastExportedDirection[lane] = dir;
-                }
+            boolean allowRankUpdate = rankChanged && (now - lastRankUpdateTs >= POSITION_DEBOUNCE_MS);
+            if (allowRankUpdate) {
+                System.arraycopy(newRanks, 0, displayedRanks, 0, LANES_COUNT);
+                lastRankUpdateTs = now;
+            }
 
-                if (allowRankUpdate) {
-                    controller.sendSetExport(RE_SCENE, "position_lane_" + lane, String.valueOf(displayedRanks[lane]));
+            // Send exports to RE (if connected).
+            if (controller != null) {
+                for (int lane = 0; lane < LANES_COUNT; lane++) {
+                    String dir = lastDirection[lane] == null ? "" : lastDirection[lane];
+                    String distValue = String.format(Locale.US, "%.3f", lastTotalDistance[lane]);
+
+                    boolean needSendDist = !hasExportedDistance[lane] || Math.abs(lastTotalDistance[lane] - lastExportedDistance[lane]) > DISTANCE_EXPORT_EPS;
+                    boolean needSendDir = lastExportedDirection[lane] == null ? !dir.isEmpty() : !lastExportedDirection[lane].equals(dir);
+
+                    if (needSendDist) {
+                        controller.sendSetExport(RE_SCENE, "distance_lane_" + lane, distValue);
+                        lastExportedDistance[lane] = lastTotalDistance[lane];
+                        hasExportedDistance[lane] = true;
+                    }
+
+                    if (needSendDir) {
+                        controller.sendSetExport(RE_SCENE, "directin_lane_" + lane, dir);
+                        lastExportedDirection[lane] = dir;
+                    }
+
+                    if (allowRankUpdate) {
+                        controller.sendSetExport(RE_SCENE, "position_lane_" + lane, String.valueOf(displayedRanks[lane]));
+                    }
                 }
             }
         }
@@ -621,16 +875,26 @@ public class RootLayoutController {
     }
 
     private void updateSplitUiFromState() {
-        for (int lane = 0; lane < LANES_COUNT; lane++) {
-            if (positionLabels[lane] != null) {
-                int rank = displayedRanks[lane];
-                positionLabels[lane].setText(rank > 0 ? String.valueOf(rank) : "");
+        synchronized (splitsStateLock) {
+            double leaderDist = 0;
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                leaderDist = Math.max(leaderDist, lastTotalDistance[lane]);
             }
-            if (distanceLabels[lane] != null) {
-                distanceLabels[lane].setText(String.format(Locale.US, "%.2f", lastTotalDistance[lane]));
-            }
-            if (directionLabels[lane] != null) {
-                directionLabels[lane].setText(lastDirection[lane] == null ? "" : lastDirection[lane]);
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                if (positionLabels[lane] != null) {
+                    int rank = displayedRanks[lane];
+                    positionLabels[lane].setText(rank > 0 ? String.valueOf(rank) : "");
+                }
+                if (distanceLabels[lane] != null) {
+                    distanceLabels[lane].setText(String.format(Locale.US, "%.2f", lastTotalDistance[lane]));
+                }
+                if (gpLabels[lane] != null) {
+                    double gp = leaderDist - lastTotalDistance[lane];
+                    gpLabels[lane].setText(String.format(Locale.US, "%.2f", gp));
+                }
+                if (directionLabels[lane] != null) {
+                    directionLabels[lane].setText(lastDirection[lane] == null ? "" : lastDirection[lane]);
+                }
             }
         }
     }
@@ -677,22 +941,25 @@ public class RootLayoutController {
         splits.setHgap(10);
         participants.clear();
 
-        for (int lane = 0; lane < LANES_COUNT; lane++) {
-            positionLabels[lane] = null;
-            distanceLabels[lane] = null;
-            directionLabels[lane] = null;
+        synchronized (splitsStateLock) {
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                positionLabels[lane] = null;
+                distanceLabels[lane] = null;
+                gpLabels[lane] = null;
+                directionLabels[lane] = null;
 
-            lastTotalDistance[lane] = 0;
-            lastJsonXSegment[lane] = 0;
-            hasLastJsonXSegment[lane] = false;
-            lastDirection[lane] = null;
+                lastTotalDistance[lane] = 0;
+                lastJsonXSegment[lane] = 0;
+                hasLastJsonXSegment[lane] = false;
+                lastDirection[lane] = null;
 
-            displayedRanks[lane] = 0;
-            lastExportedDistance[lane] = 0;
-            hasExportedDistance[lane] = false;
-            lastExportedDirection[lane] = null;
+                displayedRanks[lane] = 0;
+                lastExportedDistance[lane] = 0;
+                hasExportedDistance[lane] = false;
+                lastExportedDirection[lane] = null;
+            }
+            lastRankUpdateTs = 0;
         }
-        lastRankUpdateTs = 0;
 
         firstPlaceText.clear();
         secondPlaceText.clear();
@@ -708,17 +975,21 @@ public class RootLayoutController {
         // Extra columns between athlete names and split columns.
         int positionCol = 2;
         int distanceCol = 3;
-        int directionCol = 4;
-        int splitStartColumn = 5;
+        int gpCol = 4;
+        int directionCol = 5;
+        int splitStartColumn = 6;
 
         Label positionHeader = new Label("Pos");
         Label distanceHeader = new Label("Dist (m)");
+        Label gpHeader = new Label("GP");
         Label directionHeader = new Label("Dir");
         GridPane.setHalignment(positionHeader, HPos.CENTER);
         GridPane.setHalignment(distanceHeader, HPos.CENTER);
+        GridPane.setHalignment(gpHeader, HPos.CENTER);
         GridPane.setHalignment(directionHeader, HPos.CENTER);
         splits.add(positionHeader, positionCol, 0);
         splits.add(distanceHeader, distanceCol, 0);
+        splits.add(gpHeader, gpCol, 0);
         splits.add(directionHeader, directionCol, 0);
 
         for (int splitIdx = 0; splitIdx < columns; splitIdx++) {
@@ -771,14 +1042,17 @@ public class RootLayoutController {
             int laneIdx = row - 1;
             positionLabels[laneIdx] = new Label("");
             distanceLabels[laneIdx] = new Label("");
+            gpLabels[laneIdx] = new Label("");
             directionLabels[laneIdx] = new Label("");
 
             GridPane.setHalignment(positionLabels[laneIdx], HPos.CENTER);
             GridPane.setHalignment(distanceLabels[laneIdx], HPos.CENTER);
+            GridPane.setHalignment(gpLabels[laneIdx], HPos.CENTER);
             GridPane.setHalignment(directionLabels[laneIdx], HPos.CENTER);
 
             splits.add(positionLabels[laneIdx], positionCol, row);
             splits.add(distanceLabels[laneIdx], distanceCol, row);
+            splits.add(gpLabels[laneIdx], gpCol, row);
             splits.add(directionLabels[laneIdx], directionCol, row);
         }
         scrollPaneSplits.setContent(splits);
