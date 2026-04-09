@@ -86,6 +86,7 @@ public class RootLayoutController {
     private volatile boolean splitsTcpServerRunning = false;
     private final List<Socket> splitsTcpClients = new ArrayList<>();
     private final Object splitsStateLock = new Object();
+    private boolean pendingSplitsJsonReset = false;
     private static final int SPLITS_TCP_BROADCAST_HZ = 25;
     private ScheduledExecutorService splitsTcpBroadcastExecutor;
 
@@ -623,6 +624,14 @@ public class RootLayoutController {
         updateSplitsTcpServerUi(splitsTcpServerRunning ? "Listening" : "Stopped");
     }
 
+    /** Следующий JSON сплит-сервера будет с полем "reset": true (один раз). */
+    public void notifySplitsTcpReset() {
+        synchronized (splitsStateLock) {
+            pendingSplitsJsonReset = true;
+        }
+        broadcastSplitsAsJson();
+    }
+
     private void startSplitsTcpBroadcastScheduler() {
         if (!splitsTcpServerRunning) return;
         stopSplitsTcpBroadcastScheduler();
@@ -676,6 +685,9 @@ public class RootLayoutController {
 
     private String buildSplitsJson() {
         synchronized (splitsStateLock) {
+            boolean resetOut = pendingSplitsJsonReset;
+            pendingSplitsJsonReset = false;
+
             double leaderDist = 0;
             for (int l = 0; l < LANES_COUNT; l++) {
                 leaderDist = Math.max(leaderDist, lastTotalDistance[l]);
@@ -683,11 +695,10 @@ public class RootLayoutController {
             int[] ranks = computeRanksByTotalDistance();
 
             StringBuilder sb = new StringBuilder();
-            sb.append("{");
+            sb.append("{\"reset\":").append(resetOut ? "true" : "false");
             for (int lane = 0; lane < participants.size(); lane++) {
                 Participant p = participants.get(lane);
-                if (lane > 0) sb.append(",");
-                sb.append("\"").append(lane).append("\":{");
+                sb.append(",\"").append(lane).append("\":{");
                 sb.append("\"splits\":[");
 
                 List<Split> laneSplits = p.getSplits();

@@ -134,6 +134,7 @@ public class DataReader {
             rootLayoutController.secondPlaceText.clear();
             rootLayoutController.thirdPlaceText.clear();
             rootLayoutController.timerLabel.setText("0.0");
+            rootLayoutController.notifySplitsTcpReset();
         })).start();
     }
 
