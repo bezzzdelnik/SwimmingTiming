@@ -11,6 +11,7 @@
 <?import javafx.scene.control.TabPane?>
 <?import javafx.scene.control.TextArea?>
 <?import javafx.scene.control.TextField?>
+<?import javafx.scene.control.ToggleButton?>
 <?import javafx.scene.control.ToggleGroup?>
 <?import javafx.scene.image.ImageView?>
 <?import javafx.scene.layout.AnchorPane?>
@@ -259,7 +260,8 @@
                                                 <ScrollPane fx:id="scrollPaneSplits" fitToHeight="true" maxWidth="5000.0" minHeight="350.0" prefHeight="350.0" prefWidth="1324.0" />
                                                 <HBox spacing="20.0">
                                                     <children>
-                                                        <Button mnemonicParsing="false" onAction="#hideLeaders" text="Убрать лидеров" />
+                                                        <ToggleButton fx:id="oradPlaceLeadersToggle" mnemonicParsing="false" onAction="#onOradPlaceLeadersToggle" text="Показать лидеров" />
+                                                        <Button mnemonicParsing="false" onAction="#hideLeaders" text="Убрать победителей" />
                                                         <Button mnemonicParsing="false" onAction="#showRecordLine" text="Показать линию" />
                                                         <Button mnemonicParsing="false" onAction="#hideRecordLine" text="Убрать линию" />
                                           <Button mnemonicParsing="false" onAction="#hideAll" text="Убрать всех">

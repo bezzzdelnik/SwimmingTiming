@@ -52,9 +52,12 @@ public class RootLayoutController {
     private Retalk2ConnectionController controller = null;
 
     private static final String RE_SCENE = "Olympic/swimming";
+    /** Сцена плашек лидеров (ORAD). */
+    private static final String PLACE_SWIMMING_SCENE = "Olympic/Place_swimming";
     private static final int LANES_COUNT = 10;
     private static final long POSITION_DEBOUNCE_MS = 300;
     private static final double DISTANCE_EXPORT_EPS = 0.05; // meters
+    private static final double PLASH_POSITION_X_EXPORT_EPS = 0.02;
 
     private final Label[] positionLabels = new Label[LANES_COUNT];
     private final Label[] distanceLabels = new Label[LANES_COUNT];
@@ -72,6 +75,16 @@ public class RootLayoutController {
     private final String[] lastExportedDirection = new String[LANES_COUNT];
 
     private long lastRankUpdateTs = 0;
+
+    /** Экспорт топ-4 на Place_swimming: обновляется по TCP, без debounce рангов. */
+    private volatile boolean leadersPlaceSwimmingTracking = false;
+
+    private final int[] lastPlashVisibleSent = new int[LANES_COUNT];
+    private final boolean[] lastPlashPosXInitialized = new boolean[LANES_COUNT];
+    private final double[] lastPlashPosXSent = new double[LANES_COUNT];
+    private final String[] lastPlashDelaySent = new String[LANES_COUNT];
+    private final String[] lastPlashPlaceSent = new String[LANES_COUNT];
+    private final String[] lastPlashChildSent = new String[LANES_COUNT];
 
     private Socket tcpSocket;
     private Thread tcpThread;
@@ -127,6 +140,8 @@ public class RootLayoutController {
     @FXML private TextField reAddress, reCanvas;
 
     @FXML public TextField thirdPlaceText, secondPlaceText, firstPlaceText;
+
+    @FXML private ToggleButton oradPlaceLeadersToggle;
 
     private OradController oradConnectionController;
 
@@ -324,8 +339,11 @@ public class RootLayoutController {
                     setProperties("encoding", newValue);
                 });
 
-
-
+        Arrays.fill(lastPlashVisibleSent, -1);
+        if (oradPlaceLeadersToggle != null) {
+            oradPlaceLeadersToggle.selectedProperty().addListener((obs, prev, sel) ->
+                    oradPlaceLeadersToggle.setText(Boolean.TRUE.equals(sel) ? "Убрать лидеров" : "Показать лидеров"));
+        }
 
         createGridPaneSplits();
     }
@@ -683,6 +701,143 @@ public class RootLayoutController {
         return ranks;
     }
 
+    private static String plashGroupSuffix(int laneZeroBased) {
+        return String.format("%03d", laneZeroBased + 1);
+    }
+
+    private void resetPlaceSwimmingLeaderExportCacheLocked() {
+        Arrays.fill(lastPlashVisibleSent, -1);
+        Arrays.fill(lastPlashPosXInitialized, false);
+        Arrays.fill(lastPlashDelaySent, null);
+        Arrays.fill(lastPlashPlaceSent, null);
+        Arrays.fill(lastPlashChildSent, null);
+    }
+
+    /** Топ-4 по пройденной дистанции; при равенстве — меньший индекс дорожки выше. */
+    private int[] computeTopFourLanesByDistanceLocked() {
+        Integer[] idx = new Integer[LANES_COUNT];
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            idx[lane] = lane;
+        }
+        Arrays.sort(idx, (a, b) -> {
+            int cmp = Double.compare(lastTotalDistance[b], lastTotalDistance[a]);
+            if (cmp != 0) {
+                return cmp;
+            }
+            return Integer.compare(a, b);
+        });
+        return new int[]{idx[0], idx[1], idx[2], idx[3]};
+    }
+
+    private static String formatGapBehindLeaderRu(double metersBehind) {
+        return String.format(Locale.GERMANY, "%+.1f", metersBehind) + "м";
+    }
+
+    /**
+     * Плашки лидеров на {@link #PLACE_SWIMMING_SCENE}. Удерживать {@link #splitsStateLock}.
+     * Visible только у дорожек из топ-4; {@code Position_X} — для всех (x_m из TCP по дорожке).
+     * Для топ-4: {@code Geometry_Place-R-NNN_Input_String} — место в четвёрке {@code "1"}…{@code "4"}.
+     */
+    private void applyPlaceSwimmingLeaderExportsLocked(boolean forceResend) {
+        if (controller == null || !leadersPlaceSwimmingTracking) {
+            return;
+        }
+        int[] top4 = computeTopFourLanesByDistanceLocked();
+        int leaderLane = top4[0];
+        double leaderDist = lastTotalDistance[leaderLane];
+        boolean[] inTop4 = new boolean[LANES_COUNT];
+        for (int lane : top4) {
+            inTop4[lane] = true;
+        }
+
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            String suf = plashGroupSuffix(lane);
+            int visible = inTop4[lane] ? 1 : 0;
+            if (forceResend || lastPlashVisibleSent[lane] != visible) {
+                controller.sendSetExport(PLACE_SWIMMING_SCENE,
+                        "Object_Plash-Group-" + suf + "_Object_Visible", String.valueOf(visible));
+                lastPlashVisibleSent[lane] = visible;
+            }
+
+            double posX = hasLastJsonXSegment[lane] ? lastJsonXSegment[lane] : 0.0;
+            boolean needPos = forceResend || !lastPlashPosXInitialized[lane]
+                    || Math.abs(posX - lastPlashPosXSent[lane]) > PLASH_POSITION_X_EXPORT_EPS;
+            if (needPos) {
+                controller.sendSetExport(PLACE_SWIMMING_SCENE,
+                        "Transformation_Plash-Group-" + suf + "_Position_X",
+                        String.format(Locale.US, "%.6f", posX));
+                lastPlashPosXSent[lane] = posX;
+                lastPlashPosXInitialized[lane] = true;
+            }
+
+            if (inTop4[lane]) {
+                int placeInFour = 0;
+                for (int i = 0; i < 4; i++) {
+                    if (top4[i] == lane) {
+                        placeInFour = i + 1;
+                        break;
+                    }
+                }
+                String placeStr = String.valueOf(placeInFour);
+                if (forceResend || !placeStr.equals(lastPlashPlaceSent[lane])) {
+                    controller.sendSetExport(PLACE_SWIMMING_SCENE,
+                            "Geometry_Place-R-" + suf + "_Input_String", placeStr);
+                    lastPlashPlaceSent[lane] = placeStr;
+                }
+
+                String delay = (lane == leaderLane) ? "ЛИДЕР"
+                        : formatGapBehindLeaderRu(leaderDist - lastTotalDistance[lane]);
+                String dir = lastDirection[lane];
+                String child = (dir != null && dir.equalsIgnoreCase("right")) ? "2" : "1";
+                if (forceResend || !delay.equals(lastPlashDelaySent[lane])) {
+                    controller.sendSetExport(PLACE_SWIMMING_SCENE,
+                            "Geometry_Delay-R-" + suf + "_Input_String", delay);
+                    lastPlashDelaySent[lane] = delay;
+                }
+                if (forceResend || !child.equals(lastPlashChildSent[lane])) {
+                    controller.sendSetExport(PLACE_SWIMMING_SCENE,
+                            "Object_Plash-Group-" + suf + "_C_Enable_DrawingChildIndex", child);
+                    lastPlashChildSent[lane] = child;
+                }
+            } else {
+                lastPlashDelaySent[lane] = null;
+                lastPlashPlaceSent[lane] = null;
+                lastPlashChildSent[lane] = null;
+            }
+        }
+    }
+
+    private void sendAllPlaceSwimmingPlaquesHidden() {
+        if (controller == null) {
+            return;
+        }
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            String suf = plashGroupSuffix(lane);
+            controller.sendSetExport(PLACE_SWIMMING_SCENE,
+                    "Object_Plash-Group-" + suf + "_Object_Visible", "0");
+        }
+    }
+
+    @FXML
+    private void onOradPlaceLeadersToggle() {
+        if (oradPlaceLeadersToggle == null) {
+            return;
+        }
+        boolean on = oradPlaceLeadersToggle.isSelected();
+        leadersPlaceSwimmingTracking = on;
+        if (!on) {
+            sendAllPlaceSwimmingPlaquesHidden();
+            synchronized (splitsStateLock) {
+                resetPlaceSwimmingLeaderExportCacheLocked();
+            }
+        } else {
+            synchronized (splitsStateLock) {
+                resetPlaceSwimmingLeaderExportCacheLocked();
+                applyPlaceSwimmingLeaderExportsLocked(true);
+            }
+        }
+    }
+
     private String buildSplitsJson() {
         synchronized (splitsStateLock) {
             boolean resetOut = pendingSplitsJsonReset;
@@ -870,6 +1025,9 @@ public class RootLayoutController {
                         controller.sendSetExport(RE_SCENE, "position_lane_" + lane, String.valueOf(displayedRanks[lane]));
                     }
                 }
+                if (leadersPlaceSwimmingTracking) {
+                    applyPlaceSwimmingLeaderExportsLocked(false);
+                }
             }
         }
 
@@ -970,6 +1128,7 @@ public class RootLayoutController {
                 lastExportedDirection[lane] = null;
             }
             lastRankUpdateTs = 0;
+            resetPlaceSwimmingLeaderExportCacheLocked();
         }
 
         firstPlaceText.clear();
@@ -1067,10 +1226,22 @@ public class RootLayoutController {
             splits.add(directionLabels[laneIdx], directionCol, row);
         }
         scrollPaneSplits.setContent(splits);
+
+        if (controller != null && leadersPlaceSwimmingTracking) {
+            synchronized (splitsStateLock) {
+                applyPlaceSwimmingLeaderExportsLocked(true);
+            }
+        }
     }
 
     public void setOradController(Retalk2ConnectionController controller) {
         this.controller = controller;
+        if (controller != null && leadersPlaceSwimmingTracking) {
+            synchronized (splitsStateLock) {
+                resetPlaceSwimmingLeaderExportCacheLocked();
+                applyPlaceSwimmingLeaderExportsLocked(true);
+            }
+        }
     }
 
     public Retalk2ConnectionController getController() {
