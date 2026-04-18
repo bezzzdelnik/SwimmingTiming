@@ -54,6 +54,7 @@ public class RootLayoutController {
     private static final String RE_SCENE = "Olympic/swimming";
     /** Сцена плашек лидеров (ORAD). */
     private static final String PLACE_SWIMMING_SCENE = "Olympic/Place_swimming";
+    private static final String PLACE_SWIMMING_ALL_GROUP_VISIBLE = "Object_ALL-GROUP_Object_Visible";
     private static final int LANES_COUNT = 10;
     private static final long POSITION_DEBOUNCE_MS = 300;
     private static final double DISTANCE_EXPORT_EPS = 0.05; // meters
@@ -67,6 +68,9 @@ public class RootLayoutController {
     private final double[] lastTotalDistance = new double[LANES_COUNT];
     private final double[] lastJsonXSegment = new double[LANES_COUNT];
     private final boolean[] hasLastJsonXSegment = new boolean[LANES_COUNT];
+    /** Только ORAD Place_swimming Position_X — сырое x_m_pool из того же swimmer JSON. */
+    private final double[] lastTcpXmPoolForOrad = new double[LANES_COUNT];
+    private final boolean[] hasLastTcpXmPoolForOrad = new boolean[LANES_COUNT];
     private final String[] lastDirection = new String[LANES_COUNT];
     private final int[] displayedRanks = new int[LANES_COUNT];
 
@@ -93,6 +97,7 @@ public class RootLayoutController {
 
     private final Pattern laneIdPattern = Pattern.compile("\"lane_id\":(\\d+)");
     private final Pattern xPattern = Pattern.compile("\"x_m\":([-0-9\\.Ee]+)");
+    private final Pattern xPoolPattern = Pattern.compile("\"x_m_pool\":([-0-9\\.Ee]+)");
     private final Pattern directionPattern = Pattern.compile("\"direction\":\"(left|right)\"");
     private ServerSocket splitsTcpServerSocket;
     private Thread splitsTcpServerThread;
@@ -142,6 +147,10 @@ public class RootLayoutController {
     @FXML public TextField thirdPlaceText, secondPlaceText, firstPlaceText;
 
     @FXML private ToggleButton oradPlaceLeadersToggle;
+    /** Слоты ORAD 001…010 получают данные с дорожек 9…0 вместо 0…9. */
+    @FXML private CheckBox oradLaneReverseCheckBox;
+    /** Инвертировать left/right от правила по числу сплитов (только ORAD). */
+    @FXML private CheckBox oradLeadersDirectionReverseCheckBox;
 
     private OradController oradConnectionController;
 
@@ -343,6 +352,12 @@ public class RootLayoutController {
         if (oradPlaceLeadersToggle != null) {
             oradPlaceLeadersToggle.selectedProperty().addListener((obs, prev, sel) ->
                     oradPlaceLeadersToggle.setText(Boolean.TRUE.equals(sel) ? "Убрать лидеров" : "Показать лидеров"));
+        }
+        if (oradLaneReverseCheckBox != null) {
+            oradLaneReverseCheckBox.selectedProperty().addListener((o, p, n) -> refreshOradPlaceLeadersExportsIfTracking());
+        }
+        if (oradLeadersDirectionReverseCheckBox != null) {
+            oradLeadersDirectionReverseCheckBox.selectedProperty().addListener((o, p, n) -> refreshOradPlaceLeadersExportsIfTracking());
         }
 
         createGridPaneSplits();
@@ -713,6 +728,54 @@ public class RootLayoutController {
         Arrays.fill(lastPlashChildSent, null);
     }
 
+    private void sendPlaceSwimmingAllGroupMasterVisible(boolean visible) {
+        if (controller == null) {
+            return;
+        }
+        controller.sendSetExport(PLACE_SWIMMING_SCENE, PLACE_SWIMMING_ALL_GROUP_VISIBLE, visible ? "1" : "0");
+    }
+
+    private void refreshOradPlaceLeadersExportsIfTracking() {
+        if (!leadersPlaceSwimmingTracking) {
+            return;
+        }
+        synchronized (splitsStateLock) {
+            resetPlaceSwimmingLeaderExportCacheLocked();
+            applyPlaceSwimmingLeaderExportsLocked(true);
+        }
+    }
+
+    private static int countFilledSplits(Participant p) {
+        if (p == null) {
+            return 0;
+        }
+        int n = 0;
+        for (Split s : p.getSplits()) {
+            if (s.getSpl() != null && !s.getSpl().isEmpty()) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * Направление плашки в ORAD: 0 и чётное число заполненных сплитов — left (1),
+     * нечётное — right (2). «РЕВЕРС ЛИДЕРОВ» инвертирует.
+     */
+    private String oradChildIndexFromSplitsForLane(int lane, boolean reverseLeadersDir) {
+        int n = countFilledSplits(participants.size() > lane ? participants.get(lane) : null);
+        boolean left = (n % 2 == 0);
+        if (reverseLeadersDir) {
+            left = !left;
+        }
+        return left ? "1" : "2";
+    }
+
+    /** Слот экспорта ORAD 0..9 → индекс дорожки-источника данных. */
+    private int mapOradSlotToSourceLane(int oradSlot, boolean reverseLanes) {
+        return reverseLanes ? (LANES_COUNT - 1 - oradSlot) : oradSlot;
+    }
+
     /** Топ-4 по пройденной дистанции; при равенстве — меньший индекс дорожки выше. */
     private int[] computeTopFourLanesByDistanceLocked() {
         Integer[] idx = new Integer[LANES_COUNT];
@@ -735,13 +798,17 @@ public class RootLayoutController {
 
     /**
      * Плашки лидеров на {@link #PLACE_SWIMMING_SCENE}. Удерживать {@link #splitsStateLock}.
-     * Visible только у дорожек из топ-4; {@code Position_X} — для всех (x_m из TCP по дорожке).
-     * Для топ-4: {@code Geometry_Place-R-NNN_Input_String} — место в четвёрке {@code "1"}…{@code "4"}.
+     * Расчёт топ-4 по программным дорожкам 0..9; в ORAD слоты 001..010 при «РЕВЕРС ДОРОЖЕК»
+     * получают данные с дорожек в обратном порядке. Направление плашки — по сплитам (см. чекбокс реверса).
      */
     private void applyPlaceSwimmingLeaderExportsLocked(boolean forceResend) {
         if (controller == null || !leadersPlaceSwimmingTracking) {
             return;
         }
+        boolean reverseLanes = oradLaneReverseCheckBox != null && oradLaneReverseCheckBox.isSelected();
+        boolean reverseLeadersDir = oradLeadersDirectionReverseCheckBox != null
+                && oradLeadersDirectionReverseCheckBox.isSelected();
+
         int[] top4 = computeTopFourLanesByDistanceLocked();
         int leaderLane = top4[0];
         double leaderDist = lastTotalDistance[leaderLane];
@@ -750,59 +817,60 @@ public class RootLayoutController {
             inTop4[lane] = true;
         }
 
-        for (int lane = 0; lane < LANES_COUNT; lane++) {
-            String suf = plashGroupSuffix(lane);
-            int visible = inTop4[lane] ? 1 : 0;
-            if (forceResend || lastPlashVisibleSent[lane] != visible) {
+        for (int oradSlot = 0; oradSlot < LANES_COUNT; oradSlot++) {
+            int srcLane = mapOradSlotToSourceLane(oradSlot, reverseLanes);
+            String suf = plashGroupSuffix(oradSlot);
+
+            int visible = inTop4[srcLane] ? 1 : 0;
+            if (forceResend || lastPlashVisibleSent[oradSlot] != visible) {
                 controller.sendSetExport(PLACE_SWIMMING_SCENE,
                         "Object_Plash-Group-" + suf + "_Object_Visible", String.valueOf(visible));
-                lastPlashVisibleSent[lane] = visible;
+                lastPlashVisibleSent[oradSlot] = visible;
             }
 
-            double posX = hasLastJsonXSegment[lane] ? lastJsonXSegment[lane] : 0.0;
-            boolean needPos = forceResend || !lastPlashPosXInitialized[lane]
-                    || Math.abs(posX - lastPlashPosXSent[lane]) > PLASH_POSITION_X_EXPORT_EPS;
+            double posX = hasLastTcpXmPoolForOrad[srcLane] ? lastTcpXmPoolForOrad[srcLane] : 0.0;
+            boolean needPos = forceResend || !lastPlashPosXInitialized[oradSlot]
+                    || Math.abs(posX - lastPlashPosXSent[oradSlot]) > PLASH_POSITION_X_EXPORT_EPS;
             if (needPos) {
                 controller.sendSetExport(PLACE_SWIMMING_SCENE,
                         "Transformation_Plash-Group-" + suf + "_Position_X",
                         String.format(Locale.US, "%.6f", posX));
-                lastPlashPosXSent[lane] = posX;
-                lastPlashPosXInitialized[lane] = true;
+                lastPlashPosXSent[oradSlot] = posX;
+                lastPlashPosXInitialized[oradSlot] = true;
             }
 
-            if (inTop4[lane]) {
+            if (inTop4[srcLane]) {
                 int placeInFour = 0;
                 for (int i = 0; i < 4; i++) {
-                    if (top4[i] == lane) {
+                    if (top4[i] == srcLane) {
                         placeInFour = i + 1;
                         break;
                     }
                 }
                 String placeStr = String.valueOf(placeInFour);
-                if (forceResend || !placeStr.equals(lastPlashPlaceSent[lane])) {
+                if (forceResend || !placeStr.equals(lastPlashPlaceSent[oradSlot])) {
                     controller.sendSetExport(PLACE_SWIMMING_SCENE,
                             "Geometry_Place-R-" + suf + "_Input_String", placeStr);
-                    lastPlashPlaceSent[lane] = placeStr;
+                    lastPlashPlaceSent[oradSlot] = placeStr;
                 }
 
-                String delay = (lane == leaderLane) ? "ЛИДЕР"
-                        : formatGapBehindLeaderRu(leaderDist - lastTotalDistance[lane]);
-                String dir = lastDirection[lane];
-                String child = (dir != null && dir.equalsIgnoreCase("right")) ? "2" : "1";
-                if (forceResend || !delay.equals(lastPlashDelaySent[lane])) {
+                String delay = (srcLane == leaderLane) ? "ЛИДЕР"
+                        : formatGapBehindLeaderRu(leaderDist - lastTotalDistance[srcLane]);
+                String child = oradChildIndexFromSplitsForLane(srcLane, reverseLeadersDir);
+                if (forceResend || !delay.equals(lastPlashDelaySent[oradSlot])) {
                     controller.sendSetExport(PLACE_SWIMMING_SCENE,
                             "Geometry_Delay-R-" + suf + "_Input_String", delay);
-                    lastPlashDelaySent[lane] = delay;
+                    lastPlashDelaySent[oradSlot] = delay;
                 }
-                if (forceResend || !child.equals(lastPlashChildSent[lane])) {
+                if (forceResend || !child.equals(lastPlashChildSent[oradSlot])) {
                     controller.sendSetExport(PLACE_SWIMMING_SCENE,
                             "Object_Plash-Group-" + suf + "_C_Enable_DrawingChildIndex", child);
-                    lastPlashChildSent[lane] = child;
+                    lastPlashChildSent[oradSlot] = child;
                 }
             } else {
-                lastPlashDelaySent[lane] = null;
-                lastPlashPlaceSent[lane] = null;
-                lastPlashChildSent[lane] = null;
+                lastPlashDelaySent[oradSlot] = null;
+                lastPlashPlaceSent[oradSlot] = null;
+                lastPlashChildSent[oradSlot] = null;
             }
         }
     }
@@ -811,8 +879,9 @@ public class RootLayoutController {
         if (controller == null) {
             return;
         }
-        for (int lane = 0; lane < LANES_COUNT; lane++) {
-            String suf = plashGroupSuffix(lane);
+        sendPlaceSwimmingAllGroupMasterVisible(false);
+        for (int oradSlot = 0; oradSlot < LANES_COUNT; oradSlot++) {
+            String suf = plashGroupSuffix(oradSlot);
             controller.sendSetExport(PLACE_SWIMMING_SCENE,
                     "Object_Plash-Group-" + suf + "_Object_Visible", "0");
         }
@@ -831,6 +900,9 @@ public class RootLayoutController {
                 resetPlaceSwimmingLeaderExportCacheLocked();
             }
         } else {
+            if (controller != null) {
+                sendPlaceSwimmingAllGroupMasterVisible(true);
+            }
             synchronized (splitsStateLock) {
                 resetPlaceSwimmingLeaderExportCacheLocked();
                 applyPlaceSwimmingLeaderExportsLocked(true);
@@ -902,6 +974,8 @@ public class RootLayoutController {
 
         boolean[] seenLane = new boolean[LANES_COUNT];
         double[] frameX = new double[LANES_COUNT];
+        boolean[] havePoolFrame = new boolean[LANES_COUNT];
+        double[] frameXmPool = new double[LANES_COUNT];
         String[] frameDirections = new String[LANES_COUNT];
 
         int swimmersStart = cleaned.indexOf("\"swimmers\":[");
@@ -923,7 +997,12 @@ public class RootLayoutController {
 
                         Integer laneId = extractInt(laneIdPattern, swimmerObj);
                         Double xVal = extractDouble(xPattern, swimmerObj);
+                        Double xPool = extractDouble(xPoolPattern, swimmerObj);
 
+                        if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xPool != null) {
+                            havePoolFrame[laneId] = true;
+                            frameXmPool[laneId] = xPool;
+                        }
                         if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xVal != null) {
                             seenLane[laneId] = true;
                             frameX[laneId] = xVal;
@@ -942,7 +1021,14 @@ public class RootLayoutController {
         long now = System.currentTimeMillis();
 
         synchronized (splitsStateLock) {
-            // Update state for lanes present in this frame.
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                if (havePoolFrame[lane]) {
+                    lastTcpXmPoolForOrad[lane] = frameXmPool[lane];
+                    hasLastTcpXmPoolForOrad[lane] = true;
+                }
+            }
+
+            // Update state for lanes present in this frame (дистанция и UI по x_m).
             for (int lane = 0; lane < LANES_COUNT; lane++) {
                 if (!seenLane[lane]) continue;
 
@@ -1120,6 +1206,8 @@ public class RootLayoutController {
                 lastTotalDistance[lane] = 0;
                 lastJsonXSegment[lane] = 0;
                 hasLastJsonXSegment[lane] = false;
+                lastTcpXmPoolForOrad[lane] = 0;
+                hasLastTcpXmPoolForOrad[lane] = false;
                 lastDirection[lane] = null;
 
                 displayedRanks[lane] = 0;
@@ -1228,7 +1316,9 @@ public class RootLayoutController {
         scrollPaneSplits.setContent(splits);
 
         if (controller != null && leadersPlaceSwimmingTracking) {
+            sendPlaceSwimmingAllGroupMasterVisible(true);
             synchronized (splitsStateLock) {
+                resetPlaceSwimmingLeaderExportCacheLocked();
                 applyPlaceSwimmingLeaderExportsLocked(true);
             }
         }
@@ -1237,6 +1327,7 @@ public class RootLayoutController {
     public void setOradController(Retalk2ConnectionController controller) {
         this.controller = controller;
         if (controller != null && leadersPlaceSwimmingTracking) {
+            sendPlaceSwimmingAllGroupMasterVisible(true);
             synchronized (splitsStateLock) {
                 resetPlaceSwimmingLeaderExportCacheLocked();
                 applyPlaceSwimmingLeaderExportsLocked(true);
