@@ -59,6 +59,14 @@ public class RootLayoutController {
     private static final long POSITION_DEBOUNCE_MS = 300;
     private static final double DISTANCE_EXPORT_EPS = 0.05; // meters
     private static final double PLASH_POSITION_X_EXPORT_EPS = 0.02;
+    private static final int ORAD_POSITION_EXPORT_HZ = 25;
+    private static final int ORAD_POSITION_EXPORT_HZ_FAST = 50;
+    private static final long ORAD_POSITION_BUFFER_DELAY_MS = 40;
+    private static final long ORAD_POSITION_DUPLICATE_DELAY_MS = 10;
+    private static final String ORAD_POS_MODE_BUFFERED_25HZ = "buffered_25hz";
+    private static final String ORAD_POS_MODE_BUFFERED_50HZ = "buffered_50hz";
+    private static final String ORAD_POS_MODE_BUFFERED_DELAY_40MS = "buffered_delay_40ms";
+    private static final String ORAD_POS_MODE_RAW_DUPLICATE_10MS = "raw_duplicate_10ms";
 
     private final Label[] positionLabels = new Label[LANES_COUNT];
     private final Label[] distanceLabels = new Label[LANES_COUNT];
@@ -89,6 +97,10 @@ public class RootLayoutController {
     private final String[] lastPlashDelaySent = new String[LANES_COUNT];
     private final String[] lastPlashPlaceSent = new String[LANES_COUNT];
     private final String[] lastPlashChildSent = new String[LANES_COUNT];
+    private final boolean[] pendingPlashPosXDirty = new boolean[LANES_COUNT];
+    private final boolean[] pendingPlashPosXForce = new boolean[LANES_COUNT];
+    private final double[] pendingPlashPosXValue = new double[LANES_COUNT];
+    private final long[] pendingPlashPosXDueAtMs = new long[LANES_COUNT];
 
     private Socket tcpSocket;
     private Thread tcpThread;
@@ -107,6 +119,8 @@ public class RootLayoutController {
     private boolean pendingSplitsJsonReset = false;
     private static final int SPLITS_TCP_BROADCAST_HZ = 25;
     private ScheduledExecutorService splitsTcpBroadcastExecutor;
+    private ScheduledExecutorService placeSwimmingPosExportExecutor;
+    private ScheduledExecutorService placeSwimmingPosDuplicateExecutor;
 
     @FXML
     private TextArea logArea;
@@ -151,6 +165,8 @@ public class RootLayoutController {
     @FXML private CheckBox oradLaneReverseCheckBox;
     /** Инвертировать left/right от правила по числу сплитов (только ORAD). */
     @FXML private CheckBox oradLeadersDirectionReverseCheckBox;
+    /** Режим отправки Position_X в ORAD. */
+    @FXML private ComboBox<String> oradPosXModeComboBox;
 
     private OradController oradConnectionController;
 
@@ -177,6 +193,12 @@ public class RootLayoutController {
     private final ObservableList<String> stopBits = FXCollections.observableArrayList("1", "2", "1.5");
 
     private final ObservableList<String> encodingList = FXCollections.observableArrayList("UTF-8", "Windows-1251");
+    private final ObservableList<String> oradPosXModeList = FXCollections.observableArrayList(
+            "1) Буфер 25 Гц",
+            "2) Буфер 50 Гц",
+            "3) Буфер + задержка 40мс",
+            "4) Сырое TCP + дубль 10мс"
+    );
 
     private String serialPortName = "COM3";
     private int serialSpeed = 9600;
@@ -359,7 +381,21 @@ public class RootLayoutController {
         if (oradLeadersDirectionReverseCheckBox != null) {
             oradLeadersDirectionReverseCheckBox.selectedProperty().addListener((o, p, n) -> refreshOradPlaceLeadersExportsIfTracking());
         }
+        if (oradPosXModeComboBox != null) {
+            oradPosXModeComboBox.setItems(oradPosXModeList);
+            String mode = properties.getProperty("oradPositionXMode", ORAD_POS_MODE_BUFFERED_25HZ);
+            oradPosXModeComboBox.getSelectionModel().select(posXModeToUiLabel(mode));
+            if (oradPosXModeComboBox.getSelectionModel().isEmpty()) {
+                oradPosXModeComboBox.getSelectionModel().select(oradPosXModeList.get(0));
+            }
+            oradPosXModeComboBox.valueProperty().addListener((o, p, n) -> {
+                String newMode = uiLabelToPosXMode(n);
+                setProperties("oradPositionXMode", newMode);
+                startPlaceSwimmingPosExportScheduler();
+            });
+        }
 
+        startPlaceSwimmingPosExportScheduler();
         createGridPaneSplits();
     }
 
@@ -399,6 +435,8 @@ public class RootLayoutController {
         stopSerial();
         stopTcp();
         stopSplitsTcpServer();
+        stopPlaceSwimmingPosExportScheduler();
+        stopPlaceSwimmingPosDuplicateScheduler();
     }
 
     @FXML
@@ -726,6 +764,207 @@ public class RootLayoutController {
         Arrays.fill(lastPlashDelaySent, null);
         Arrays.fill(lastPlashPlaceSent, null);
         Arrays.fill(lastPlashChildSent, null);
+        Arrays.fill(pendingPlashPosXDirty, false);
+        Arrays.fill(pendingPlashPosXForce, false);
+        Arrays.fill(pendingPlashPosXDueAtMs, 0L);
+    }
+
+    /** Кладет последнее Position_X в буфер; отправка идет отдельным тикером 25 Гц. */
+    private void queuePlaceSwimmingPosXExportLocked(int oradSlot, double posX, boolean forceResend) {
+        long now = System.currentTimeMillis();
+        pendingPlashPosXValue[oradSlot] = posX;
+        pendingPlashPosXDirty[oradSlot] = true;
+        if (isPosXModeBufferedDelay40ms()) {
+            if (pendingPlashPosXDueAtMs[oradSlot] == 0L || forceResend) {
+                pendingPlashPosXDueAtMs[oradSlot] = now + ORAD_POSITION_BUFFER_DELAY_MS;
+            }
+        } else {
+            pendingPlashPosXDueAtMs[oradSlot] = 0L;
+        }
+        if (forceResend) {
+            pendingPlashPosXForce[oradSlot] = true;
+        }
+    }
+
+    private void flushQueuedPlaceSwimmingPosXExports() {
+        synchronized (splitsStateLock) {
+            if (controller == null || !leadersPlaceSwimmingTracking) {
+                return;
+            }
+            if (isPosXModeRawDuplicate10ms()) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            for (int oradSlot = 0; oradSlot < LANES_COUNT; oradSlot++) {
+                if (!pendingPlashPosXDirty[oradSlot]) {
+                    continue;
+                }
+                if (isPosXModeBufferedDelay40ms() && now < pendingPlashPosXDueAtMs[oradSlot]) {
+                    continue;
+                }
+                double posX = pendingPlashPosXValue[oradSlot];
+                boolean forceResend = pendingPlashPosXForce[oradSlot];
+                boolean needPos = forceResend
+                        || !lastPlashPosXInitialized[oradSlot]
+                        || Math.abs(posX - lastPlashPosXSent[oradSlot]) > PLASH_POSITION_X_EXPORT_EPS;
+                if (needPos) {
+                    String suf = plashGroupSuffix(oradSlot);
+                    String exportName = "Transformation_Plash-Group-" + suf + "_Position_X";
+                    String exportValue = String.format(Locale.US, "%.6f", posX);
+                    controller.sendSetExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
+                    lastPlashPosXSent[oradSlot] = posX;
+                    lastPlashPosXInitialized[oradSlot] = true;
+                }
+                pendingPlashPosXDirty[oradSlot] = false;
+                pendingPlashPosXForce[oradSlot] = false;
+                pendingPlashPosXDueAtMs[oradSlot] = 0L;
+            }
+        }
+    }
+
+    private void startPlaceSwimmingPosExportScheduler() {
+        stopPlaceSwimmingPosExportScheduler();
+        startPlaceSwimmingPosDuplicateScheduler();
+        placeSwimmingPosExportExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "orad-place-swimming-pos-export");
+            t.setDaemon(true);
+            return t;
+        });
+        long periodMs = getBufferedPosXSchedulerPeriodMs();
+        placeSwimmingPosExportExecutor.scheduleAtFixedRate(this::flushQueuedPlaceSwimmingPosXExports,
+                0, periodMs, TimeUnit.MILLISECONDS);
+    }
+
+    private long getBufferedPosXSchedulerPeriodMs() {
+        int hz = isPosXModeBuffered50hz() ? ORAD_POSITION_EXPORT_HZ_FAST : ORAD_POSITION_EXPORT_HZ;
+        return Math.max(1L, 1000L / hz);
+    }
+
+    private void stopPlaceSwimmingPosExportScheduler() {
+        if (placeSwimmingPosExportExecutor == null) return;
+        placeSwimmingPosExportExecutor.shutdown();
+        try {
+            if (!placeSwimmingPosExportExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                placeSwimmingPosExportExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            placeSwimmingPosExportExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        placeSwimmingPosExportExecutor = null;
+    }
+
+    private void startPlaceSwimmingPosDuplicateScheduler() {
+        stopPlaceSwimmingPosDuplicateScheduler();
+        placeSwimmingPosDuplicateExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "orad-place-swimming-pos-duplicate");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    private void stopPlaceSwimmingPosDuplicateScheduler() {
+        if (placeSwimmingPosDuplicateExecutor == null) return;
+        placeSwimmingPosDuplicateExecutor.shutdown();
+        try {
+            if (!placeSwimmingPosDuplicateExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                placeSwimmingPosDuplicateExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            placeSwimmingPosDuplicateExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        placeSwimmingPosDuplicateExecutor = null;
+    }
+
+    private void scheduleDuplicatePositionXExport(String scene, String exportName, String exportValue) {
+        ScheduledExecutorService duplicateExecutor = placeSwimmingPosDuplicateExecutor;
+        if (duplicateExecutor == null) {
+            return;
+        }
+        duplicateExecutor.schedule(() -> {
+            Retalk2ConnectionController currentController = controller;
+            if (currentController == null || !leadersPlaceSwimmingTracking) {
+                return;
+            }
+            currentController.sendSetExport(scene, exportName, exportValue);
+        }, ORAD_POSITION_DUPLICATE_DELAY_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Тестовый режим: немедленно отправляем сырое x_m_pool из TCP + дубль через 10мс.
+     * Работает независимо от буферного 25Гц режима.
+     */
+    private void sendPlaceSwimmingPosXRawFromTcpLocked(boolean[] havePoolFrame, double[] frameXmPool) {
+        if (controller == null || !leadersPlaceSwimmingTracking) {
+            return;
+        }
+        if (!isPosXModeRawDuplicate10ms()) {
+            return;
+        }
+        boolean reverseLanes = oradLaneReverseCheckBox != null && oradLaneReverseCheckBox.isSelected();
+        for (int oradSlot = 0; oradSlot < LANES_COUNT; oradSlot++) {
+            int srcLane = mapOradSlotToSourceLane(oradSlot, reverseLanes);
+            if (!havePoolFrame[srcLane]) {
+                continue;
+            }
+            String suf = plashGroupSuffix(oradSlot);
+            String exportName = "Transformation_Plash-Group-" + suf + "_Position_X";
+            String exportValue = String.format(Locale.US, "%.6f", frameXmPool[srcLane]);
+            controller.sendSetExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
+            scheduleDuplicatePositionXExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
+            lastPlashPosXSent[oradSlot] = frameXmPool[srcLane];
+            lastPlashPosXInitialized[oradSlot] = true;
+        }
+    }
+
+    private boolean isPosXModeRawDuplicate10ms() {
+        return ORAD_POS_MODE_RAW_DUPLICATE_10MS.equals(getSelectedPosXMode());
+    }
+
+    private boolean isPosXModeBufferedDelay40ms() {
+        return ORAD_POS_MODE_BUFFERED_DELAY_40MS.equals(getSelectedPosXMode());
+    }
+
+    private boolean isPosXModeBuffered50hz() {
+        return ORAD_POS_MODE_BUFFERED_50HZ.equals(getSelectedPosXMode());
+    }
+
+    private String getSelectedPosXMode() {
+        if (oradPosXModeComboBox == null) {
+            return ORAD_POS_MODE_BUFFERED_25HZ;
+        }
+        String v = oradPosXModeComboBox.getValue();
+        return uiLabelToPosXMode(v);
+    }
+
+    private String posXModeToUiLabel(String mode) {
+        if (ORAD_POS_MODE_BUFFERED_50HZ.equals(mode)) {
+            return oradPosXModeList.get(1);
+        }
+        if (ORAD_POS_MODE_BUFFERED_DELAY_40MS.equals(mode)) {
+            return oradPosXModeList.get(2);
+        }
+        if (ORAD_POS_MODE_RAW_DUPLICATE_10MS.equals(mode)) {
+            return oradPosXModeList.get(3);
+        }
+        return oradPosXModeList.get(0);
+    }
+
+    private String uiLabelToPosXMode(String label) {
+        if (label == null) {
+            return ORAD_POS_MODE_BUFFERED_25HZ;
+        }
+        if (label.startsWith("2)")) {
+            return ORAD_POS_MODE_BUFFERED_50HZ;
+        }
+        if (label.startsWith("3)")) {
+            return ORAD_POS_MODE_BUFFERED_DELAY_40MS;
+        }
+        if (label.startsWith("4)")) {
+            return ORAD_POS_MODE_RAW_DUPLICATE_10MS;
+        }
+        return ORAD_POS_MODE_BUFFERED_25HZ;
     }
 
     private void sendPlaceSwimmingAllGroupMasterVisible(boolean visible) {
@@ -829,14 +1068,8 @@ public class RootLayoutController {
             }
 
             double posX = hasLastTcpXmPoolForOrad[srcLane] ? lastTcpXmPoolForOrad[srcLane] : 0.0;
-            boolean needPos = forceResend || !lastPlashPosXInitialized[oradSlot]
-                    || Math.abs(posX - lastPlashPosXSent[oradSlot]) > PLASH_POSITION_X_EXPORT_EPS;
-            if (needPos) {
-                controller.sendSetExport(PLACE_SWIMMING_SCENE,
-                        "Transformation_Plash-Group-" + suf + "_Position_X",
-                        String.format(Locale.US, "%.6f", posX));
-                lastPlashPosXSent[oradSlot] = posX;
-                lastPlashPosXInitialized[oradSlot] = true;
+            if (!isPosXModeRawDuplicate10ms()) {
+                queuePlaceSwimmingPosXExportLocked(oradSlot, posX, forceResend);
             }
 
             if (inTop4[srcLane]) {
@@ -1027,6 +1260,7 @@ public class RootLayoutController {
                     hasLastTcpXmPoolForOrad[lane] = true;
                 }
             }
+            sendPlaceSwimmingPosXRawFromTcpLocked(havePoolFrame, frameXmPool);
 
             // Update state for lanes present in this frame (дистанция и UI по x_m).
             for (int lane = 0; lane < LANES_COUNT; lane++) {
