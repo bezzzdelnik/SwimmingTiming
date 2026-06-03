@@ -85,6 +85,9 @@
                                                 <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
                                                 <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
                                                 <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
+                                                <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
+                                                <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
+                                                <RowConstraints minHeight="10.0" prefHeight="30.0" vgrow="SOMETIMES" />
                                             </rowConstraints>
                                             <children>
                                                 <Label text="TCP socket server port" />
@@ -103,6 +106,21 @@
                                                     </children>
                                                 </HBox>
                                                 <ComboBox fx:id="oradPosXModeComboBox" prefWidth="280.0" promptText="Режим Position_X" GridPane.columnIndex="1" GridPane.rowIndex="3" />
+                                                <Label text="Tracks TCP server port" GridPane.rowIndex="4" />
+                                                <TextField fx:id="tracksTcpServerPortField" text="9101" GridPane.columnIndex="1" GridPane.rowIndex="4" />
+                                                <HBox spacing="10.0" GridPane.rowIndex="5">
+                                                    <children>
+                                                        <Button fx:id="startTracksTcpServerButton" mnemonicParsing="false" onAction="#startTracksTcpServer" text="Start tracks server" />
+                                                        <Button fx:id="stopTracksTcpServerButton" mnemonicParsing="false" onAction="#stopTracksTcpServer" text="Stop tracks server" />
+                                                    </children>
+                                                </HBox>
+                                                <HBox spacing="10.0" GridPane.columnIndex="1" GridPane.rowIndex="6">
+                                                    <children>
+                                                        <Label fx:id="tracksTcpServerStatusLabel" text="Stopped" />
+                                                        <Label text="Clients:" />
+                                                        <Label fx:id="tracksTcpClientsCountLabel" text="0" />
+                                                    </children>
+                                                </HBox>
                                             </children>
                                         </GridPane>
                                     </children>

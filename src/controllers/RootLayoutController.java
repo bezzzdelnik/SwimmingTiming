@@ -119,6 +119,13 @@ public class RootLayoutController {
     private boolean pendingSplitsJsonReset = false;
     private static final int SPLITS_TCP_BROADCAST_HZ = 25;
     private ScheduledExecutorService splitsTcpBroadcastExecutor;
+
+    private ServerSocket tracksTcpServerSocket;
+    private Thread tracksTcpServerThread;
+    private volatile boolean tracksTcpServerRunning = false;
+    private final List<Socket> tracksTcpClients = new ArrayList<>();
+    private static final int TRACKS_TCP_BROADCAST_HZ = 25;
+    private ScheduledExecutorService tracksTcpBroadcastExecutor;
     private ScheduledExecutorService placeSwimmingPosExportExecutor;
     private ScheduledExecutorService placeSwimmingPosDuplicateExecutor;
 
@@ -139,6 +146,9 @@ public class RootLayoutController {
     @FXML private TextField splitsTcpServerPortField;
     @FXML private Button startSplitsTcpServerButton, stopSplitsTcpServerButton;
     @FXML private Label splitsTcpServerStatusLabel, splitsTcpClientsCountLabel;
+    @FXML private TextField tracksTcpServerPortField;
+    @FXML private Button startTracksTcpServerButton, stopTracksTcpServerButton;
+    @FXML private Label tracksTcpServerStatusLabel, tracksTcpClientsCountLabel;
 
     @FXML private ScrollPane scrollPaneSplits;
 
@@ -282,6 +292,24 @@ public class RootLayoutController {
         }
         updateSplitsTcpServerUi("Stopped");
 
+        if (tracksTcpServerPortField != null) {
+            tracksTcpServerPortField.setText(properties.getProperty("tracksTcpServerPort", "9101"));
+            tracksTcpServerPortField.textProperty().addListener((observable, oldValue, newValue) -> {
+                if (newValue == null) return;
+                String v = newValue.trim();
+                if (v.isEmpty()) return;
+                try {
+                    Integer.parseInt(v);
+                    setProperties("tracksTcpServerPort", v);
+                } catch (NumberFormatException ignored) {
+                }
+            });
+        }
+        if (startTracksTcpServerButton != null && stopTracksTcpServerButton != null) {
+            startTracksTcpServerButton.setDisable(false);
+            stopTracksTcpServerButton.setDisable(true);
+        }
+        updateTracksTcpServerUi("Stopped");
 
         reAddress.textProperty().addListener((observable, oldValue, newValue) ->{
             setProperties("reAddress", newValue);
@@ -736,6 +764,185 @@ public class RootLayoutController {
             Thread.currentThread().interrupt();
         }
         splitsTcpBroadcastExecutor = null;
+    }
+
+    @FXML
+    private void startTracksTcpServer() {
+        if (tracksTcpServerRunning) return;
+        int port;
+        try {
+            port = Integer.parseInt(tracksTcpServerPortField.getText().trim());
+        } catch (Exception ex) {
+            updateTracksTcpServerUi("Bad port");
+            return;
+        }
+
+        tracksTcpServerRunning = true;
+        if (startTracksTcpServerButton != null) startTracksTcpServerButton.setDisable(true);
+        if (stopTracksTcpServerButton != null) stopTracksTcpServerButton.setDisable(false);
+        updateTracksTcpServerUi("Starting...");
+
+        tracksTcpServerThread = new Thread(() -> {
+            try {
+                tracksTcpServerSocket = new ServerSocket(port);
+                Platform.runLater(this::startTracksTcpBroadcastScheduler);
+                updateTracksTcpServerUi("Listening on " + port);
+                while (tracksTcpServerRunning) {
+                    Socket client = tracksTcpServerSocket.accept();
+                    client.setTcpNoDelay(true);
+                    synchronized (tracksTcpClients) {
+                        tracksTcpClients.add(client);
+                    }
+                    updateTracksTcpServerUi("Listening on " + port);
+                }
+            } catch (IOException ex) {
+                if (tracksTcpServerRunning) {
+                    updateTracksTcpServerUi("Server error");
+                }
+            } finally {
+                tracksTcpServerRunning = false;
+                closeTracksTcpServerResources();
+                Platform.runLater(() -> {
+                    if (startTracksTcpServerButton != null) startTracksTcpServerButton.setDisable(false);
+                    if (stopTracksTcpServerButton != null) stopTracksTcpServerButton.setDisable(true);
+                    if (tracksTcpServerStatusLabel != null && !"Server error".equals(tracksTcpServerStatusLabel.getText())) {
+                        tracksTcpServerStatusLabel.setText("Stopped");
+                    }
+                    if (tracksTcpClientsCountLabel != null) tracksTcpClientsCountLabel.setText("0");
+                });
+            }
+        }, "tracks-tcp-server");
+        tracksTcpServerThread.start();
+    }
+
+    @FXML
+    private void stopTracksTcpServer() {
+        tracksTcpServerRunning = false;
+        if (tracksTcpServerThread != null) {
+            tracksTcpServerThread.interrupt();
+            tracksTcpServerThread = null;
+        }
+        closeTracksTcpServerResources();
+        if (startTracksTcpServerButton != null) startTracksTcpServerButton.setDisable(false);
+        if (stopTracksTcpServerButton != null) stopTracksTcpServerButton.setDisable(true);
+        updateTracksTcpServerUi("Stopped");
+    }
+
+    private void closeTracksTcpServerResources() {
+        stopTracksTcpBroadcastScheduler();
+        if (tracksTcpServerSocket != null) {
+            try {
+                tracksTcpServerSocket.close();
+            } catch (IOException ignored) {
+            }
+            tracksTcpServerSocket = null;
+        }
+        synchronized (tracksTcpClients) {
+            for (Socket client : tracksTcpClients) {
+                try {
+                    client.close();
+                } catch (IOException ignored) {
+                }
+            }
+            tracksTcpClients.clear();
+        }
+    }
+
+    private void updateTracksTcpServerUi(String status) {
+        Platform.runLater(() -> {
+            if (tracksTcpServerStatusLabel != null) {
+                tracksTcpServerStatusLabel.setText(status);
+            }
+            if (tracksTcpClientsCountLabel != null) {
+                synchronized (tracksTcpClients) {
+                    tracksTcpClientsCountLabel.setText(String.valueOf(tracksTcpClients.size()));
+                }
+            }
+        });
+    }
+
+    private void broadcastTracksAsJson() {
+        String payload = buildTracksJson() + "\n";
+        byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+
+        synchronized (tracksTcpClients) {
+            List<Socket> dead = new ArrayList<>();
+            for (Socket client : tracksTcpClients) {
+                try {
+                    OutputStream os = client.getOutputStream();
+                    os.write(bytes);
+                    os.flush();
+                } catch (IOException ex) {
+                    dead.add(client);
+                }
+            }
+            for (Socket client : dead) {
+                try {
+                    client.close();
+                } catch (IOException ignored) {
+                }
+                tracksTcpClients.remove(client);
+            }
+        }
+        updateTracksTcpServerUi(tracksTcpServerRunning ? "Listening" : "Stopped");
+    }
+
+    private String buildTracksJson() {
+        synchronized (splitsStateLock) {
+            int poolMax = swimPoolSize;
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"tracks\":{");
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                if (lane > 0) sb.append(",");
+                double coordinate = hasLastTcpXmPoolForOrad[lane]
+                        ? lastTcpXmPoolForOrad[lane]
+                        : 0;
+                coordinate = Math.max(0, Math.min(poolMax, coordinate));
+                sb.append("\"").append(lane).append("\":{");
+                sb.append("\"coordinate\":")
+                        .append(String.format(Locale.US, "%.1f", coordinate))
+                        .append(",\"distance\":")
+                        .append(String.format(Locale.US, "%.1f", lastTotalDistance[lane]))
+                        .append("}");
+            }
+            sb.append("}}");
+            return sb.toString();
+        }
+    }
+
+    private void startTracksTcpBroadcastScheduler() {
+        if (!tracksTcpServerRunning) return;
+        stopTracksTcpBroadcastScheduler();
+        tracksTcpBroadcastExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "tracks-tcp-broadcast");
+            t.setDaemon(true);
+            return t;
+        });
+        long periodMs = Math.max(1L, 1000L / TRACKS_TCP_BROADCAST_HZ);
+        tracksTcpBroadcastExecutor.scheduleAtFixedRate(() -> {
+            if (!tracksTcpServerRunning) return;
+            synchronized (tracksTcpClients) {
+                if (tracksTcpClients.isEmpty()) return;
+            }
+            Platform.runLater(() -> {
+                if (!tracksTcpServerRunning) return;
+                broadcastTracksAsJson();
+            });
+        }, 0, periodMs, TimeUnit.MILLISECONDS);
+    }
+
+    private void stopTracksTcpBroadcastScheduler() {
+        if (tracksTcpBroadcastExecutor == null) return;
+        tracksTcpBroadcastExecutor.shutdown();
+        try {
+            if (!tracksTcpBroadcastExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                tracksTcpBroadcastExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            tracksTcpBroadcastExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        tracksTcpBroadcastExecutor = null;
     }
 
     /** Rank 1 = leader (max distance); ties broken by lower lane index. */
