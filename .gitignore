@@ -1,0 +1,5 @@
+# Build output
+out/
+
+# Local runtime settings (ports, COM, RE address)
+config.properties
