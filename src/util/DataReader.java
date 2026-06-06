@@ -97,7 +97,7 @@ public class DataReader {
     public void readTimer(String output) {
         if (output.contains("SOHDC4R02STXBS1") || output.contains("SOHDC4R02STXBS")) {
             String timer = output.split("\\s+")[2];
-            new Thread(() -> Platform.runLater(() -> rootLayoutController.timerLabel.setText(timer))).start();
+            new Thread(() -> Platform.runLater(() -> rootLayoutController.updateTimer(timer))).start();
             if (timer.equals("0.1")) {
                 startRecordLine();
             }
@@ -133,7 +133,7 @@ public class DataReader {
             rootLayoutController.firstPlaceText.clear();
             rootLayoutController.secondPlaceText.clear();
             rootLayoutController.thirdPlaceText.clear();
-            rootLayoutController.timerLabel.setText("0.0");
+            rootLayoutController.updateTimer("0.0");
             rootLayoutController.notifySplitsTcpReset();
         })).start();
     }

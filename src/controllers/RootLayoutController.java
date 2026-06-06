@@ -22,8 +22,12 @@ import util.DataReader;
 
 import java.io.*;
 import java.nio.ByteBuffer;
+import java.net.ConnectException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
@@ -41,6 +45,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class RootLayoutController {
+    private static final String CONFIG_PROPERTIES_FILE = "config.properties";
     private Properties properties = new Properties();
     private Stage primaryStage;
     public void setPrimaryStage(Stage primaryStage) {
@@ -55,7 +60,12 @@ public class RootLayoutController {
     /** Сцена плашек лидеров (ORAD). */
     private static final String PLACE_SWIMMING_SCENE = "Olympic/Place_swimming";
     private static final String PLACE_SWIMMING_ALL_GROUP_VISIBLE = "Object_ALL-GROUP_Object_Visible";
+    private static final String RE_NUMBERS_MODE = "_numbers_mode";
+    private static final double ORAD_NUMBERS_MODE_TIMER_MIN = 15.0;
+    private static final double ORAD_NUMBERS_MODE_TIMER_MAX = 55.0;
     private static final int LANES_COUNT = 10;
+    private static final int TCP_CONNECT_TIMEOUT_MS = 5000;
+    private static final int TCP_READ_TIMEOUT_MS = 3000;
     private static final long POSITION_DEBOUNCE_MS = 300;
     private static final double DISTANCE_EXPORT_EPS = 0.05; // meters
     private static final double PLASH_POSITION_X_EXPORT_EPS = 0.02;
@@ -87,6 +97,7 @@ public class RootLayoutController {
     private final String[] lastExportedDirection = new String[LANES_COUNT];
 
     private long lastRankUpdateTs = 0;
+    private boolean oradNumbersModeSentForStartWindow = false;
 
     /** Экспорт топ-4 на Place_swimming: обновляется по TCP, без debounce рангов. */
     private volatile boolean leadersPlaceSwimmingTracking = false;
@@ -175,6 +186,8 @@ public class RootLayoutController {
     @FXML private CheckBox oradLaneReverseCheckBox;
     /** Инвертировать left/right от правила по числу сплитов (только ORAD). */
     @FXML private CheckBox oradLeadersDirectionReverseCheckBox;
+    /** Инвертировать Position_X в ORAD (x_m_pool * -1). */
+    @FXML private CheckBox oradPosXReverseCheckBox;
     /** Режим отправки Position_X в ORAD. */
     @FXML private ComboBox<String> oradPosXModeComboBox;
 
@@ -409,6 +422,9 @@ public class RootLayoutController {
         if (oradLeadersDirectionReverseCheckBox != null) {
             oradLeadersDirectionReverseCheckBox.selectedProperty().addListener((o, p, n) -> refreshOradPlaceLeadersExportsIfTracking());
         }
+        if (oradPosXReverseCheckBox != null) {
+            oradPosXReverseCheckBox.selectedProperty().addListener((o, p, n) -> refreshOradPlaceLeadersExportsIfTracking());
+        }
         if (oradPosXModeComboBox != null) {
             oradPosXModeComboBox.setItems(oradPosXModeList);
             String mode = properties.getProperty("oradPositionXMode", ORAD_POS_MODE_BUFFERED_25HZ);
@@ -495,111 +511,162 @@ public class RootLayoutController {
         try {
             port = Integer.parseInt(tcpPortField.getText().trim());
         } catch (Exception ex) {
-            tcpConnectionLabel.setText("TCP bad port");
+            updateTcpConnectionUi("TCP bad port", false);
             return;
         }
 
         tcpRunning = true;
-        startTcpButton.setDisable(true);
-        stopTcpButton.setDisable(false);
-        tcpConnectionLabel.setText("TCP Connecting...");
-        if (tcpConnectionImageView != null) {
-            tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
-        }
+        updateTcpConnectionUi("TCP Connecting...", false);
+        if (startTcpButton != null) startTcpButton.setDisable(true);
+        if (stopTcpButton != null) stopTcpButton.setDisable(false);
 
         tcpThread = new Thread(() -> {
+            String disconnectReason = "TCP Disconnected";
             try {
-                tcpSocket = new Socket(host, port);
-                tcpSocket.setSoTimeout(0);
+                Socket socket = new Socket();
+                socket.connect(new InetSocketAddress(host, port), TCP_CONNECT_TIMEOUT_MS);
+                socket.setTcpNoDelay(true);
+                socket.setSoTimeout(TCP_READ_TIMEOUT_MS);
+                tcpSocket = socket;
 
-                Platform.runLater(() -> {
-                    tcpConnectionLabel.setText("TCP Connected");
-                    if (tcpConnectionImageView != null) {
-                        tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(con)));
-                    }
-                });
+                Platform.runLater(() -> updateTcpConnectionUi("TCP Connected", true));
 
-                InputStream inputStream = tcpSocket.getInputStream();
+                InputStream inputStream = socket.getInputStream();
                 byte[] buffer = new byte[8192];
                 StringBuilder streamBuffer = new StringBuilder();
 
-                while (tcpRunning) {
-                    int read = inputStream.read(buffer);
-                    if (read < 0) break;
-                    if (read == 0) continue;
+                while (tcpRunning && !Thread.currentThread().isInterrupted()) {
+                    int read;
+                    try {
+                        read = inputStream.read(buffer);
+                    } catch (SocketTimeoutException timeout) {
+                        if (!tcpRunning || socket.isClosed() || !socket.isConnected()) {
+                            break;
+                        }
+                        continue;
+                    }
+
+                    if (read < 0) {
+                        disconnectReason = "TCP server closed connection";
+                        break;
+                    }
+                    if (read == 0) {
+                        continue;
+                    }
 
                     streamBuffer.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
-
-                    // Extract complete JSON objects from the stream (naive brace-depth parser).
-                    while (true) {
-                        int startIdx = streamBuffer.indexOf("{");
-                        if (startIdx < 0) break;
-
-                        int depth = 0;
-                        boolean foundEnd = false;
-                        for (int i = startIdx; i < streamBuffer.length(); i++) {
-                            char ch = streamBuffer.charAt(i);
-                            if (ch == '{') depth++;
-                            else if (ch == '}') depth--;
-                            if (depth == 0) {
-                                String jsonObj = streamBuffer.substring(startIdx, i + 1);
-                                streamBuffer.delete(0, i + 1);
-                                foundEnd = true;
-                                handleTcpJson(jsonObj);
-                                break;
-                            }
-                        }
-
-                        if (!foundEnd) break;
-                    }
+                    parseTcpJsonObjectsFromBuffer(streamBuffer);
+                }
+            } catch (ConnectException ex) {
+                disconnectReason = "TCP server unavailable";
+            } catch (SocketTimeoutException ex) {
+                disconnectReason = "TCP connect timeout";
+            } catch (IOException ex) {
+                if (tcpRunning) {
+                    disconnectReason = "TCP error: " + ex.getClass().getSimpleName();
                 }
             } catch (Exception ex) {
-                Platform.runLater(() -> tcpConnectionLabel.setText("TCP error: " + ex.getClass().getSimpleName()));
+                disconnectReason = "TCP error: " + ex.getClass().getSimpleName();
             } finally {
-                try {
-                    if (tcpSocket != null) tcpSocket.close();
-                } catch (IOException ignored) {
-                }
-                tcpSocket = null;
+                closeTcpSocketQuietly();
                 tcpRunning = false;
+                final String status = disconnectReason;
                 Platform.runLater(() -> {
-                    startTcpButton.setDisable(false);
-                    stopTcpButton.setDisable(true);
-                    tcpConnectionLabel.setText("TCP Disconnected");
-                    if (tcpConnectionImageView != null) {
-                        tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
-                    }
+                    if (startTcpButton != null) startTcpButton.setDisable(false);
+                    if (stopTcpButton != null) stopTcpButton.setDisable(true);
+                    updateTcpConnectionUi(status, false);
                 });
             }
         }, "tcp-json-reader");
+        tcpThread.setDaemon(true);
         tcpThread.start();
+    }
+
+    private void parseTcpJsonObjectsFromBuffer(StringBuilder streamBuffer) {
+        while (true) {
+            int startIdx = streamBuffer.indexOf("{");
+            if (startIdx < 0) {
+                break;
+            }
+
+            int depth = 0;
+            boolean foundEnd = false;
+            for (int i = startIdx; i < streamBuffer.length(); i++) {
+                char ch = streamBuffer.charAt(i);
+                if (ch == '{') {
+                    depth++;
+                } else if (ch == '}') {
+                    depth--;
+                }
+                if (depth == 0) {
+                    String jsonObj = streamBuffer.substring(startIdx, i + 1);
+                    streamBuffer.delete(0, i + 1);
+                    foundEnd = true;
+                    try {
+                        handleTcpJson(jsonObj);
+                    } catch (Exception ex) {
+                        // Bad frame must not kill the reader thread.
+                    }
+                    break;
+                }
+            }
+
+            if (!foundEnd) {
+                break;
+            }
+        }
+    }
+
+    private void closeTcpSocketQuietly() {
+        Socket socket = tcpSocket;
+        tcpSocket = null;
+        if (socket == null) {
+            return;
+        }
+        try {
+            socket.shutdownInput();
+        } catch (IOException | SocketException ignored) {
+        }
+        try {
+            socket.shutdownOutput();
+        } catch (IOException | SocketException ignored) {
+        }
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+        }
+    }
+
+    private void updateTcpConnectionUi(String status, boolean connected) {
+        if (tcpConnectionLabel != null) {
+            tcpConnectionLabel.setText(status);
+        }
+        if (tcpConnectionImageView != null) {
+            tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(connected ? con : discon)));
+        }
     }
 
     @FXML
     private void stopTcp() {
         tcpRunning = false;
-        if (tcpThread != null) {
-            tcpThread.interrupt();
-            tcpThread = null;
-        }
-        if (tcpSocket != null) {
+        closeTcpSocketQuietly();
+
+        Thread thread = tcpThread;
+        if (thread != null) {
+            thread.interrupt();
             try {
-                tcpSocket.close();
-            } catch (IOException ignored) {
+                thread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-            tcpSocket = null;
+            tcpThread = null;
         }
 
         if (startTcpButton != null && stopTcpButton != null) {
             startTcpButton.setDisable(false);
             stopTcpButton.setDisable(true);
         }
-        if (tcpConnectionLabel != null) {
-            tcpConnectionLabel.setText("TCP Disconnected");
-        }
-        if (tcpConnectionImageView != null) {
-            tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
-        }
+        updateTcpConnectionUi("TCP Disconnected", false);
     }
 
     @FXML
@@ -729,6 +796,45 @@ public class RootLayoutController {
             pendingSplitsJsonReset = true;
         }
         broadcastSplitsAsJson();
+    }
+
+    /** Обновляет UI таймера и при значении 15.0…55.0 отправляет ORAD _numbers_mode = 1. */
+    public void updateTimer(String timerText) {
+        if (timerLabel != null) {
+            timerLabel.setText(timerText);
+        }
+        if (timerText == null || timerText.trim().isEmpty()) {
+            return;
+        }
+        try {
+            double timer = Double.parseDouble(timerText.trim().replace(',', '.'));
+            if (timer >= ORAD_NUMBERS_MODE_TIMER_MIN && timer <= ORAD_NUMBERS_MODE_TIMER_MAX) {
+                sendOradNumbersModeForStartWindow();
+            } else {
+                oradNumbersModeSentForStartWindow = false;
+            }
+        } catch (NumberFormatException ignored) {
+        }
+    }
+
+    private void sendOradNumbersModeForStartWindow() {
+        if (controller == null || oradNumbersModeSentForStartWindow) {
+            return;
+        }
+        controller.sendSetExport(RE_SCENE, RE_NUMBERS_MODE, "1");
+        oradNumbersModeSentForStartWindow = true;
+    }
+
+    private boolean isOradPosXReverseEnabled() {
+        return oradPosXReverseCheckBox != null && oradPosXReverseCheckBox.isSelected();
+    }
+
+    private double oradPosXForExport(double rawXmPool) {
+        return isOradPosXReverseEnabled() ? -rawXmPool : rawXmPool;
+    }
+
+    private String formatOradPosXExport(double rawXmPool) {
+        return String.format(Locale.US, "%.6f", oradPosXForExport(rawXmPool));
     }
 
     private void startSplitsTcpBroadcastScheduler() {
@@ -1017,7 +1123,7 @@ public class RootLayoutController {
                 if (needPos) {
                     String suf = plashGroupSuffix(oradSlot);
                     String exportName = "Transformation_Plash-Group-" + suf + "_Position_X";
-                    String exportValue = String.format(Locale.US, "%.6f", posX);
+                    String exportValue = formatOradPosXExport(posX);
                     controller.sendSetExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
                     lastPlashPosXSent[oradSlot] = posX;
                     lastPlashPosXInitialized[oradSlot] = true;
@@ -1117,7 +1223,7 @@ public class RootLayoutController {
             }
             String suf = plashGroupSuffix(oradSlot);
             String exportName = "Transformation_Plash-Group-" + suf + "_Position_X";
-            String exportValue = String.format(Locale.US, "%.6f", frameXmPool[srcLane]);
+            String exportValue = formatOradPosXExport(frameXmPool[srcLane]);
             controller.sendSetExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
             scheduleDuplicatePositionXExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
             lastPlashPosXSent[oradSlot] = frameXmPool[srcLane];
@@ -1821,50 +1927,58 @@ public class RootLayoutController {
     }
 
 
-    private void loadProperties() {
-        try (InputStream input = new FileInputStream("config.properties")) {
-
-            properties.load(input);
-
-            //RESET
-            reAddress.setText(properties.getProperty(""));
-            reCanvas.setText(properties.getProperty(""));
-
-            portField.setText(properties.getProperty(""));
-            speedComboBox.getSelectionModel().select(properties.getProperty(""));
-            dataBitsComboBox.getSelectionModel().select(properties.getProperty(""));
-            stopBitsComboBox.getSelectionModel().select(properties.getProperty(""));
-            parityComboBox.getSelectionModel().select(properties.getProperty(""));
-            flowControlComboBox.getSelectionModel().select(properties.getProperty(""));
-            encodingComboBox.getSelectionModel().select(properties.getProperty(""));
-
-
-
-            //LOAD
-            reAddress.setText(properties.getProperty("reAddress"));
-            reCanvas.setText(properties.getProperty("reCanvas"));
-
-            portField.setText(properties.getProperty("serialPort"));
-            speedComboBox.getSelectionModel().select(properties.getProperty("serialSpeed"));
-            dataBitsComboBox.getSelectionModel().select(properties.getProperty("serialDataBits"));
-            stopBitsComboBox.getSelectionModel().select(properties.getProperty("serialStopBits"));
-            parityComboBox.getSelectionModel().select(properties.getProperty("serialParity"));
-            flowControlComboBox.getSelectionModel().select(properties.getProperty("serialFlow"));
-            encodingComboBox.getSelectionModel().select(properties.getProperty("encoding"));
-
-
-        } catch (IOException ex) {
-            ex.printStackTrace();
-        }
+    private void initDefaultProperties() {
+        properties.setProperty("reAddress", "localhost");
+        properties.setProperty("reCanvas", "Canvas1");
+        properties.setProperty("serialPort", "COM1");
+        properties.setProperty("serialSpeed", "9600");
+        properties.setProperty("serialDataBits", "8");
+        properties.setProperty("serialStopBits", "1");
+        properties.setProperty("serialParity", "None");
+        properties.setProperty("serialFlow", "XON/XOFF");
+        properties.setProperty("encoding", "UTF-8");
+        properties.setProperty("tcpHost", "127.0.0.1");
+        properties.setProperty("tcpPort", "9000");
+        properties.setProperty("splitsTcpServerPort", "9100");
+        properties.setProperty("tracksTcpServerPort", "9101");
+        properties.setProperty("oradPositionXMode", ORAD_POS_MODE_BUFFERED_25HZ);
     }
 
+    private void applyLoadedPropertiesToUi() {
+        reAddress.setText(properties.getProperty("reAddress", "localhost"));
+        reCanvas.setText(properties.getProperty("reCanvas", "Canvas1"));
+        portField.setText(properties.getProperty("serialPort", "COM1"));
+        speedComboBox.getSelectionModel().select(properties.getProperty("serialSpeed", "9600"));
+        dataBitsComboBox.getSelectionModel().select(properties.getProperty("serialDataBits", "8"));
+        stopBitsComboBox.getSelectionModel().select(properties.getProperty("serialStopBits", "1"));
+        parityComboBox.getSelectionModel().select(properties.getProperty("serialParity", "None"));
+        flowControlComboBox.getSelectionModel().select(properties.getProperty("serialFlow", "XON/XOFF"));
+        encodingComboBox.getSelectionModel().select(properties.getProperty("encoding", "UTF-8"));
+    }
+
+    private void loadProperties() {
+        File configFile = new File(CONFIG_PROPERTIES_FILE);
+        if (!configFile.exists()) {
+            initDefaultProperties();
+            writeProperties();
+        } else {
+            try (InputStream input = new FileInputStream(configFile)) {
+                properties.load(input);
+            } catch (IOException ex) {
+                ex.printStackTrace();
+                initDefaultProperties();
+                writeProperties();
+            }
+        }
+        applyLoadedPropertiesToUi();
+    }
     private void setProperties(String key, String value) {
         properties.setProperty(key, value);
         writeProperties();
     }
 
     private void writeProperties() {
-        try (OutputStream output = new FileOutputStream("config.properties")) {
+        try (OutputStream output = new FileOutputStream(CONFIG_PROPERTIES_FILE)) {
 
             properties.store(output, null);
 
