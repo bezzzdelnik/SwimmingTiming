@@ -284,7 +284,8 @@
                                                         <ToggleButton fx:id="oradPlaceLeadersToggle" mnemonicParsing="false" onAction="#onOradPlaceLeadersToggle" text="Показать лидеров" />
                                                         <CheckBox fx:id="oradLaneReverseCheckBox" mnemonicParsing="false" text="РЕВЕРС ДОРОЖЕК" />
                                                         <CheckBox fx:id="oradLeadersDirectionReverseCheckBox" mnemonicParsing="false" text="РЕВЕРС ЛИДЕРОВ" />
-                                                        <CheckBox fx:id="oradPosXReverseCheckBox" mnemonicParsing="false" text="РЕВЕРС ЗНАЧЕНИЙ" />
+                                                        <CheckBox fx:id="oradPosXOffsetCheckBox" mnemonicParsing="false" text="СМЕЩЕНИЕ" />
+                                                        <TextField fx:id="oradPosXOffsetField" prefWidth="70.0" promptText="0" />
                                                         <Button mnemonicParsing="false" onAction="#hideLeaders" text="Убрать победителей" />
                                                         <Button mnemonicParsing="false" onAction="#showRecordLine" text="Показать линию" />
                                                         <Button mnemonicParsing="false" onAction="#hideRecordLine" text="Убрать линию" />

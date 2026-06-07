@@ -26,7 +26,6 @@ import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
@@ -69,6 +68,8 @@ public class RootLayoutController {
     private static final long POSITION_DEBOUNCE_MS = 300;
     private static final double DISTANCE_EXPORT_EPS = 0.05; // meters
     private static final double PLASH_POSITION_X_EXPORT_EPS = 0.02;
+    private static final double ORAD_POS_X_OFFSET_MIN = -100.0;
+    private static final double ORAD_POS_X_OFFSET_MAX = 100.0;
     private static final int ORAD_POSITION_EXPORT_HZ = 25;
     private static final int ORAD_POSITION_EXPORT_HZ_FAST = 50;
     private static final long ORAD_POSITION_BUFFER_DELAY_MS = 40;
@@ -186,8 +187,9 @@ public class RootLayoutController {
     @FXML private CheckBox oradLaneReverseCheckBox;
     /** Инвертировать left/right от правила по числу сплитов (только ORAD). */
     @FXML private CheckBox oradLeadersDirectionReverseCheckBox;
-    /** Инвертировать Position_X в ORAD (x_m_pool * -1). */
-    @FXML private CheckBox oradPosXReverseCheckBox;
+    /** Смещение Position_X в ORAD (x_m_pool + offset). */
+    @FXML private CheckBox oradPosXOffsetCheckBox;
+    @FXML private TextField oradPosXOffsetField;
     /** Режим отправки Position_X в ORAD. */
     @FXML private ComboBox<String> oradPosXModeComboBox;
 
@@ -422,8 +424,25 @@ public class RootLayoutController {
         if (oradLeadersDirectionReverseCheckBox != null) {
             oradLeadersDirectionReverseCheckBox.selectedProperty().addListener((o, p, n) -> refreshOradPlaceLeadersExportsIfTracking());
         }
-        if (oradPosXReverseCheckBox != null) {
-            oradPosXReverseCheckBox.selectedProperty().addListener((o, p, n) -> refreshOradPlaceLeadersExportsIfTracking());
+        if (oradPosXOffsetCheckBox != null) {
+            oradPosXOffsetCheckBox.setSelected(Boolean.parseBoolean(
+                    properties.getProperty("oradPosXOffsetEnabled", "false")));
+            oradPosXOffsetCheckBox.selectedProperty().addListener((o, p, n) -> {
+                if (oradPosXOffsetField != null) {
+                    oradPosXOffsetField.setDisable(!Boolean.TRUE.equals(n));
+                }
+                setProperties("oradPosXOffsetEnabled", String.valueOf(Boolean.TRUE.equals(n)));
+                refreshOradPlaceLeadersExportsIfTracking();
+            });
+        }
+        if (oradPosXOffsetField != null) {
+            oradPosXOffsetField.setText(properties.getProperty("oradPosXOffset", "0"));
+            oradPosXOffsetField.setDisable(oradPosXOffsetCheckBox == null || !oradPosXOffsetCheckBox.isSelected());
+            oradPosXOffsetField.textProperty().addListener((o, p, n) -> {
+                double offset = parseOradPosXOffset(n);
+                setProperties("oradPosXOffset", String.format(Locale.US, "%.1f", offset));
+                refreshOradPlaceLeadersExportsIfTracking();
+            });
         }
         if (oradPosXModeComboBox != null) {
             oradPosXModeComboBox.setItems(oradPosXModeList);
@@ -625,11 +644,11 @@ public class RootLayoutController {
         }
         try {
             socket.shutdownInput();
-        } catch (IOException | SocketException ignored) {
+        } catch (IOException ignored) {
         }
         try {
             socket.shutdownOutput();
-        } catch (IOException | SocketException ignored) {
+        } catch (IOException ignored) {
         }
         try {
             socket.close();
@@ -825,12 +844,31 @@ public class RootLayoutController {
         oradNumbersModeSentForStartWindow = true;
     }
 
-    private boolean isOradPosXReverseEnabled() {
-        return oradPosXReverseCheckBox != null && oradPosXReverseCheckBox.isSelected();
+    private boolean isOradPosXOffsetEnabled() {
+        return oradPosXOffsetCheckBox != null && oradPosXOffsetCheckBox.isSelected();
+    }
+
+    private double parseOradPosXOffset(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return 0.0;
+        }
+        try {
+            double value = Double.parseDouble(text.trim().replace(',', '.'));
+            return Math.max(ORAD_POS_X_OFFSET_MIN, Math.min(ORAD_POS_X_OFFSET_MAX, value));
+        } catch (NumberFormatException ignored) {
+            return 0.0;
+        }
+    }
+
+    private double getOradPosXOffsetValue() {
+        if (oradPosXOffsetField == null) {
+            return 0.0;
+        }
+        return parseOradPosXOffset(oradPosXOffsetField.getText());
     }
 
     private double oradPosXForExport(double rawXmPool) {
-        return isOradPosXReverseEnabled() ? -rawXmPool : rawXmPool;
+        return isOradPosXOffsetEnabled() ? rawXmPool + getOradPosXOffsetValue() : rawXmPool;
     }
 
     private String formatOradPosXExport(double rawXmPool) {
@@ -1942,6 +1980,8 @@ public class RootLayoutController {
         properties.setProperty("splitsTcpServerPort", "9100");
         properties.setProperty("tracksTcpServerPort", "9101");
         properties.setProperty("oradPositionXMode", ORAD_POS_MODE_BUFFERED_25HZ);
+        properties.setProperty("oradPosXOffsetEnabled", "false");
+        properties.setProperty("oradPosXOffset", "0");
     }
 
     private void applyLoadedPropertiesToUi() {
