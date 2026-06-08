@@ -238,6 +238,7 @@ public class DataReader {
                     break;
                 default: break;
             }
+            rootLayoutController.autoHideOradPlaceLeadersIfShown();
             System.out.println("place " + place + "   lane " + lane + "   " + participants.get(lane).getName() + " send to RE");
         })).start();
 

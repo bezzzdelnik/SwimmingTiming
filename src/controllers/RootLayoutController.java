@@ -1471,6 +1471,23 @@ public class RootLayoutController {
         }
     }
 
+    /** Скрывает лидеров ORAD при приходе места победителя, если они были показаны. */
+    public void autoHideOradPlaceLeadersIfShown() {
+        Platform.runLater(() -> {
+            if (!leadersPlaceSwimmingTracking) {
+                return;
+            }
+            if (oradPlaceLeadersToggle != null) {
+                oradPlaceLeadersToggle.setSelected(false);
+            }
+            leadersPlaceSwimmingTracking = false;
+            sendAllPlaceSwimmingPlaquesHidden();
+            synchronized (splitsStateLock) {
+                resetPlaceSwimmingLeaderExportCacheLocked();
+            }
+        });
+    }
+
     @FXML
     private void onOradPlaceLeadersToggle() {
         if (oradPlaceLeadersToggle == null) {
