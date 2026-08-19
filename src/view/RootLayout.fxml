@@ -286,6 +286,7 @@
                                                         <CheckBox fx:id="oradLeadersDirectionReverseCheckBox" mnemonicParsing="false" text="РЕВЕРС ЛИДЕРОВ" />
                                                         <CheckBox fx:id="oradPosXOffsetCheckBox" mnemonicParsing="false" text="СМЕЩЕНИЕ" />
                                                         <TextField fx:id="oradPosXOffsetField" prefWidth="70.0" promptText="0" />
+                                                        <CheckBox fx:id="coordinateLogToFileCheckBox" mnemonicParsing="false" text="ЛОГ КООРДИНАТ" />
                                                         <Button mnemonicParsing="false" onAction="#hideLeaders" text="Убрать победителей" />
                                                         <Button mnemonicParsing="false" onAction="#showRecordLine" text="Показать линию" />
                                                         <Button mnemonicParsing="false" onAction="#hideRecordLine" text="Убрать линию" />

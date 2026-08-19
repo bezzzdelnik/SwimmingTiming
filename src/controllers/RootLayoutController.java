@@ -31,6 +31,11 @@ import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Properties;
@@ -67,7 +72,6 @@ public class RootLayoutController {
     private static final int TCP_READ_TIMEOUT_MS = 3000;
     private static final long POSITION_DEBOUNCE_MS = 300;
     private static final double DISTANCE_EXPORT_EPS = 0.05; // meters
-    private static final double PLASH_POSITION_X_EXPORT_EPS = 0.02;
     private static final double ORAD_POS_X_OFFSET_MIN = -100.0;
     private static final double ORAD_POS_X_OFFSET_MAX = 100.0;
     private static final int ORAD_POSITION_EXPORT_HZ = 25;
@@ -78,6 +82,11 @@ public class RootLayoutController {
     private static final String ORAD_POS_MODE_BUFFERED_50HZ = "buffered_50hz";
     private static final String ORAD_POS_MODE_BUFFERED_DELAY_40MS = "buffered_delay_40ms";
     private static final String ORAD_POS_MODE_RAW_DUPLICATE_10MS = "raw_duplicate_10ms";
+    private static final DateTimeFormatter COORDINATE_LOG_TIMESTAMP =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+    private static final DateTimeFormatter COORDINATE_LOG_FILE_TIMESTAMP =
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
+    private static final int COORDINATE_LOG_FLUSH_EVERY_LINES = 100;
 
     private final Label[] positionLabels = new Label[LANES_COUNT];
     private final Label[] distanceLabels = new Label[LANES_COUNT];
@@ -113,6 +122,10 @@ public class RootLayoutController {
     private final boolean[] pendingPlashPosXForce = new boolean[LANES_COUNT];
     private final double[] pendingPlashPosXValue = new double[LANES_COUNT];
     private final long[] pendingPlashPosXDueAtMs = new long[LANES_COUNT];
+    private final int[] pendingPlashPosXCount = new int[LANES_COUNT];
+    private final boolean[] hasLastTcpPlashPosX = new boolean[LANES_COUNT];
+    private final double[] previousTcpPlashPosX = new double[LANES_COUNT];
+    private final double[] lastTcpPlashPosX = new double[LANES_COUNT];
 
     private Socket tcpSocket;
     private Thread tcpThread;
@@ -140,6 +153,9 @@ public class RootLayoutController {
     private ScheduledExecutorService tracksTcpBroadcastExecutor;
     private ScheduledExecutorService placeSwimmingPosExportExecutor;
     private ScheduledExecutorService placeSwimmingPosDuplicateExecutor;
+    private final Object coordinateLogLock = new Object();
+    private BufferedWriter coordinateLogWriter;
+    private int coordinateLogPendingLines = 0;
 
     @FXML
     private TextArea logArea;
@@ -192,6 +208,8 @@ public class RootLayoutController {
     @FXML private TextField oradPosXOffsetField;
     /** Режим отправки Position_X в ORAD. */
     @FXML private ComboBox<String> oradPosXModeComboBox;
+    /** Писать лог TCP/ORAD координат в файл рядом с приложением. */
+    @FXML private CheckBox coordinateLogToFileCheckBox;
 
     private OradController oradConnectionController;
 
@@ -457,6 +475,21 @@ public class RootLayoutController {
                 startPlaceSwimmingPosExportScheduler();
             });
         }
+        if (coordinateLogToFileCheckBox != null) {
+            coordinateLogToFileCheckBox.setSelected(Boolean.parseBoolean(
+                    properties.getProperty("coordinateLogToFile", "false")));
+            coordinateLogToFileCheckBox.selectedProperty().addListener((o, p, enabled) -> {
+                setProperties("coordinateLogToFile", String.valueOf(Boolean.TRUE.equals(enabled)));
+                if (Boolean.TRUE.equals(enabled)) {
+                    initCoordinateLogFile();
+                } else {
+                    closeCoordinateLogFile();
+                }
+            });
+            if (coordinateLogToFileCheckBox.isSelected()) {
+                initCoordinateLogFile();
+            }
+        }
 
         startPlaceSwimmingPosExportScheduler();
         createGridPaneSplits();
@@ -500,6 +533,7 @@ public class RootLayoutController {
         stopSplitsTcpServer();
         stopPlaceSwimmingPosExportScheduler();
         stopPlaceSwimmingPosDuplicateScheduler();
+        closeCoordinateLogFile();
     }
 
     @FXML
@@ -875,6 +909,99 @@ public class RootLayoutController {
         return String.format(Locale.US, "%.6f", oradPosXForExport(rawXmPool));
     }
 
+    private void logCoordinate(String source, int lane, double coordinate) {
+        String line = String.format(Locale.US, "%s source=%s lane=%d coordinate=%.6f",
+                LocalDateTime.now().format(COORDINATE_LOG_TIMESTAMP), source, lane, coordinate);
+        synchronized (coordinateLogLock) {
+            if (coordinateLogWriter == null) {
+                return;
+            }
+            try {
+                coordinateLogWriter.write(line);
+                coordinateLogWriter.newLine();
+                coordinateLogPendingLines++;
+                if (coordinateLogPendingLines >= COORDINATE_LOG_FLUSH_EVERY_LINES) {
+                    coordinateLogWriter.flush();
+                    coordinateLogPendingLines = 0;
+                }
+            } catch (IOException ex) {
+                try {
+                    coordinateLogWriter.close();
+                } catch (IOException ignored) {
+                }
+                coordinateLogWriter = null;
+                coordinateLogPendingLines = 0;
+                System.out.println("Coordinate log file write failed: " + ex.getMessage());
+            }
+        }
+    }
+
+    private boolean isCoordinateLogToFileEnabled() {
+        return coordinateLogToFileCheckBox != null && coordinateLogToFileCheckBox.isSelected();
+    }
+
+    private void initCoordinateLogFile() {
+        if (!isCoordinateLogToFileEnabled()) {
+            return;
+        }
+        synchronized (coordinateLogLock) {
+            if (coordinateLogWriter != null) {
+                return;
+            }
+            try {
+                Path logDirectory = getApplicationDirectory();
+                Files.createDirectories(logDirectory);
+                String fileName = "coordinates-" +
+                        LocalDateTime.now().format(COORDINATE_LOG_FILE_TIMESTAMP) + ".log";
+                coordinateLogWriter = Files.newBufferedWriter(logDirectory.resolve(fileName), StandardCharsets.UTF_8);
+                coordinateLogWriter.write("timestamp source lane coordinate");
+                coordinateLogWriter.newLine();
+                coordinateLogWriter.flush();
+            } catch (Exception ex) {
+                coordinateLogWriter = null;
+                System.out.println("Coordinate log file init failed: " + ex.getMessage());
+            }
+        }
+    }
+
+    private Path getApplicationDirectory() {
+        try {
+            Path appPath = Paths.get(RootLayoutController.class
+                    .getProtectionDomain()
+                    .getCodeSource()
+                    .getLocation()
+                    .toURI());
+            if (Files.isRegularFile(appPath)) {
+                Path parent = appPath.getParent();
+                if (parent != null) {
+                    return parent;
+                }
+            }
+            if (Files.isDirectory(appPath)) {
+                return appPath;
+            }
+        } catch (Exception ignored) {
+        }
+        return Paths.get(".").toAbsolutePath().normalize();
+    }
+
+    private void closeCoordinateLogFile() {
+        synchronized (coordinateLogLock) {
+            if (coordinateLogWriter == null) {
+                return;
+            }
+            try {
+                coordinateLogWriter.flush();
+                coordinateLogWriter.close();
+            } catch (IOException ex) {
+                System.out.println("Coordinate log file close failed: " + ex.getMessage());
+            } finally {
+                coordinateLogWriter = null;
+                coordinateLogPendingLines = 0;
+            }
+        }
+    }
+
     private void startSplitsTcpBroadcastScheduler() {
         if (!splitsTcpServerRunning) return;
         stopSplitsTcpBroadcastScheduler();
@@ -1046,7 +1173,7 @@ public class RootLayoutController {
                 sb.append("\"coordinate\":")
                         .append(String.format(Locale.US, "%.1f", coordinate))
                         .append(",\"distance\":")
-                        .append(String.format(Locale.US, "%.1f", lastTotalDistance[lane]))
+                        .append(String.format(Locale.US, "%.1f", toDisplayedDistance(lastTotalDistance[lane])))
                         .append("}");
             }
             sb.append("}}");
@@ -1094,7 +1221,9 @@ public class RootLayoutController {
         Integer[] idx = new Integer[LANES_COUNT];
         for (int lane = 0; lane < LANES_COUNT; lane++) idx[lane] = lane;
         Arrays.sort(idx, (a, b) -> {
-            int cmp = Double.compare(lastTotalDistance[b], lastTotalDistance[a]);
+            int cmp = Double.compare(
+                    toDisplayedDistance(lastTotalDistance[b]),
+                    toDisplayedDistance(lastTotalDistance[a]));
             if (cmp != 0) return cmp;
             return Integer.compare(a, b);
         });
@@ -1118,13 +1247,40 @@ public class RootLayoutController {
         Arrays.fill(pendingPlashPosXDirty, false);
         Arrays.fill(pendingPlashPosXForce, false);
         Arrays.fill(pendingPlashPosXDueAtMs, 0L);
+        Arrays.fill(pendingPlashPosXCount, 0);
+        Arrays.fill(hasLastTcpPlashPosX, false);
+        Arrays.fill(previousTcpPlashPosX, 0.0);
+        Arrays.fill(lastTcpPlashPosX, 0.0);
     }
 
-    /** Кладет последнее Position_X в буфер; отправка идет отдельным тикером 25 Гц. */
+    /** Ставит в буфер Position_X только для дорожек с новым x_m_pool в текущем TCP-кадре. */
+    private void queuePlaceSwimmingPosXFromTcpFrameLocked(boolean[] havePoolFrame, double[] frameXmPool) {
+        if (!leadersPlaceSwimmingTracking || isPosXModeRawDuplicate10ms()) {
+            return;
+        }
+        boolean reverseLanes = oradLaneReverseCheckBox != null && oradLaneReverseCheckBox.isSelected();
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            if (!havePoolFrame[lane]) {
+                continue;
+            }
+            int oradSlot = mapSourceLaneToOradSlot(lane, reverseLanes);
+            queuePlaceSwimmingPosXExportLocked(oradSlot, frameXmPool[lane], false);
+        }
+    }
+
+    /** Кладет Position_X в буфер; в 25 Гц режиме тикер отправляет последнее TCP-значение окна. */
     private void queuePlaceSwimmingPosXExportLocked(int oradSlot, double posX, boolean forceResend) {
         long now = System.currentTimeMillis();
         pendingPlashPosXValue[oradSlot] = posX;
         pendingPlashPosXDirty[oradSlot] = true;
+        if (isPosXModeBuffered25hz()) {
+            pendingPlashPosXCount[oradSlot]++;
+            previousTcpPlashPosX[oradSlot] = hasLastTcpPlashPosX[oradSlot]
+                    ? lastTcpPlashPosX[oradSlot]
+                    : posX;
+            lastTcpPlashPosX[oradSlot] = posX;
+            hasLastTcpPlashPosX[oradSlot] = true;
+        }
         if (isPosXModeBufferedDelay40ms()) {
             if (pendingPlashPosXDueAtMs[oradSlot] == 0L || forceResend) {
                 pendingPlashPosXDueAtMs[oradSlot] = now + ORAD_POSITION_BUFFER_DELAY_MS;
@@ -1146,22 +1302,43 @@ public class RootLayoutController {
                 return;
             }
             long now = System.currentTimeMillis();
+            boolean fixedRate25hz = isPosXModeBuffered25hz();
             for (int oradSlot = 0; oradSlot < LANES_COUNT; oradSlot++) {
-                if (!pendingPlashPosXDirty[oradSlot]) {
+                if (!fixedRate25hz && !pendingPlashPosXDirty[oradSlot]) {
                     continue;
                 }
                 if (isPosXModeBufferedDelay40ms() && now < pendingPlashPosXDueAtMs[oradSlot]) {
                     continue;
                 }
-                double posX = pendingPlashPosXValue[oradSlot];
+                double posX;
+                if (fixedRate25hz) {
+                    if (pendingPlashPosXCount[oradSlot] > 0) {
+                        posX = pendingPlashPosXValue[oradSlot];
+                    } else if (hasLastTcpPlashPosX[oradSlot]) {
+                        posX = lastTcpPlashPosX[oradSlot]
+                                + (lastTcpPlashPosX[oradSlot] - previousTcpPlashPosX[oradSlot]);
+                    } else if (lastPlashPosXInitialized[oradSlot]) {
+                        posX = lastPlashPosXSent[oradSlot];
+                    } else if (pendingPlashPosXDirty[oradSlot]) {
+                        posX = pendingPlashPosXValue[oradSlot];
+                    } else {
+                        continue;
+                    }
+                } else {
+                    posX = pendingPlashPosXValue[oradSlot];
+                }
                 boolean forceResend = pendingPlashPosXForce[oradSlot];
-                boolean needPos = forceResend
+                boolean needPos = fixedRate25hz
+                        || forceResend
                         || !lastPlashPosXInitialized[oradSlot]
-                        || Math.abs(posX - lastPlashPosXSent[oradSlot]) > PLASH_POSITION_X_EXPORT_EPS;
+                        || Double.compare(posX, lastPlashPosXSent[oradSlot]) != 0;
                 if (needPos) {
+                    boolean reverseLanes = oradLaneReverseCheckBox != null && oradLaneReverseCheckBox.isSelected();
+                    int srcLane = mapOradSlotToSourceLane(oradSlot, reverseLanes);
                     String suf = plashGroupSuffix(oradSlot);
                     String exportName = "Transformation_Plash-Group-" + suf + "_Position_X";
                     String exportValue = formatOradPosXExport(posX);
+                    logCoordinate("ORAD", srcLane, oradPosXForExport(posX));
                     controller.sendSetExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
                     lastPlashPosXSent[oradSlot] = posX;
                     lastPlashPosXInitialized[oradSlot] = true;
@@ -1169,6 +1346,7 @@ public class RootLayoutController {
                 pendingPlashPosXDirty[oradSlot] = false;
                 pendingPlashPosXForce[oradSlot] = false;
                 pendingPlashPosXDueAtMs[oradSlot] = 0L;
+                pendingPlashPosXCount[oradSlot] = 0;
             }
         }
     }
@@ -1228,7 +1406,8 @@ public class RootLayoutController {
         placeSwimmingPosDuplicateExecutor = null;
     }
 
-    private void scheduleDuplicatePositionXExport(String scene, String exportName, String exportValue) {
+    private void scheduleDuplicatePositionXExport(String scene, String exportName, String exportValue,
+                                                  int lane, double coordinate) {
         ScheduledExecutorService duplicateExecutor = placeSwimmingPosDuplicateExecutor;
         if (duplicateExecutor == null) {
             return;
@@ -1238,6 +1417,7 @@ public class RootLayoutController {
             if (currentController == null || !leadersPlaceSwimmingTracking) {
                 return;
             }
+            logCoordinate("ORAD", lane, coordinate);
             currentController.sendSetExport(scene, exportName, exportValue);
         }, ORAD_POSITION_DUPLICATE_DELAY_MS, TimeUnit.MILLISECONDS);
     }
@@ -1262,8 +1442,10 @@ public class RootLayoutController {
             String suf = plashGroupSuffix(oradSlot);
             String exportName = "Transformation_Plash-Group-" + suf + "_Position_X";
             String exportValue = formatOradPosXExport(frameXmPool[srcLane]);
+            double coordinate = oradPosXForExport(frameXmPool[srcLane]);
+            logCoordinate("ORAD", srcLane, coordinate);
             controller.sendSetExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
-            scheduleDuplicatePositionXExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
+            scheduleDuplicatePositionXExport(PLACE_SWIMMING_SCENE, exportName, exportValue, srcLane, coordinate);
             lastPlashPosXSent[oradSlot] = frameXmPool[srcLane];
             lastPlashPosXInitialized[oradSlot] = true;
         }
@@ -1271,6 +1453,10 @@ public class RootLayoutController {
 
     private boolean isPosXModeRawDuplicate10ms() {
         return ORAD_POS_MODE_RAW_DUPLICATE_10MS.equals(getSelectedPosXMode());
+    }
+
+    private boolean isPosXModeBuffered25hz() {
+        return ORAD_POS_MODE_BUFFERED_25HZ.equals(getSelectedPosXMode());
     }
 
     private boolean isPosXModeBufferedDelay40ms() {
@@ -1348,6 +1534,34 @@ public class RootLayoutController {
         return n;
     }
 
+    private boolean isDistanceDisplayInverted() {
+        return distance == 50;
+    }
+
+    private double toDisplayedDistance(double progressDistance) {
+        double clamped = Math.max(0.0, Math.min(distance, progressDistance));
+        if (!isDistanceDisplayInverted()) {
+            return clamped;
+        }
+        if (clamped <= 0.1) {
+            return clamped;
+        }
+        return distance - clamped;
+    }
+
+    private String toDisplayedDirection(String direction) {
+        if (!isDistanceDisplayInverted() || direction == null) {
+            return direction;
+        }
+        if ("left".equals(direction)) {
+            return "right";
+        }
+        if ("right".equals(direction)) {
+            return "left";
+        }
+        return direction;
+    }
+
     /**
      * Направление плашки в ORAD: 0 и чётное число заполненных сплитов — left (1),
      * нечётное — right (2). «РЕВЕРС ЛИДЕРОВ» инвертирует.
@@ -1355,6 +1569,9 @@ public class RootLayoutController {
     private String oradChildIndexFromSplitsForLane(int lane, boolean reverseLeadersDir) {
         int n = countFilledSplits(participants.size() > lane ? participants.get(lane) : null);
         boolean left = (n % 2 == 0);
+        if (isDistanceDisplayInverted()) {
+            left = !left;
+        }
         if (reverseLeadersDir) {
             left = !left;
         }
@@ -1366,6 +1583,11 @@ public class RootLayoutController {
         return reverseLanes ? (LANES_COUNT - 1 - oradSlot) : oradSlot;
     }
 
+    /** Дорожка-источник → слот экспорта ORAD. */
+    private int mapSourceLaneToOradSlot(int srcLane, boolean reverseLanes) {
+        return reverseLanes ? (LANES_COUNT - 1 - srcLane) : srcLane;
+    }
+
     /** Топ-4 по пройденной дистанции; при равенстве — меньший индекс дорожки выше. */
     private int[] computeTopFourLanesByDistanceLocked() {
         Integer[] idx = new Integer[LANES_COUNT];
@@ -1373,7 +1595,9 @@ public class RootLayoutController {
             idx[lane] = lane;
         }
         Arrays.sort(idx, (a, b) -> {
-            int cmp = Double.compare(lastTotalDistance[b], lastTotalDistance[a]);
+            int cmp = Double.compare(
+                    toDisplayedDistance(lastTotalDistance[b]),
+                    toDisplayedDistance(lastTotalDistance[a]));
             if (cmp != 0) {
                 return cmp;
             }
@@ -1401,7 +1625,7 @@ public class RootLayoutController {
 
         int[] top4 = computeTopFourLanesByDistanceLocked();
         int leaderLane = top4[0];
-        double leaderDist = lastTotalDistance[leaderLane];
+        double leaderDist = toDisplayedDistance(lastTotalDistance[leaderLane]);
         boolean[] inTop4 = new boolean[LANES_COUNT];
         for (int lane : top4) {
             inTop4[lane] = true;
@@ -1418,9 +1642,9 @@ public class RootLayoutController {
                 lastPlashVisibleSent[oradSlot] = visible;
             }
 
-            double posX = hasLastTcpXmPoolForOrad[srcLane] ? lastTcpXmPoolForOrad[srcLane] : 0.0;
-            if (!isPosXModeRawDuplicate10ms()) {
-                queuePlaceSwimmingPosXExportLocked(oradSlot, posX, forceResend);
+            if (forceResend && !isPosXModeRawDuplicate10ms()) {
+                double posX = hasLastTcpXmPoolForOrad[srcLane] ? lastTcpXmPoolForOrad[srcLane] : 0.0;
+                queuePlaceSwimmingPosXExportLocked(oradSlot, posX, true);
             }
 
             if (inTop4[srcLane]) {
@@ -1439,7 +1663,7 @@ public class RootLayoutController {
                 }
 
                 String delay = (srcLane == leaderLane) ? "ЛИДЕР"
-                        : formatGapBehindLeaderRu(leaderDist - lastTotalDistance[srcLane]);
+                        : formatGapBehindLeaderRu(leaderDist - toDisplayedDistance(lastTotalDistance[srcLane]));
                 String child = oradChildIndexFromSplitsForLane(srcLane, reverseLeadersDir);
                 if (forceResend || !delay.equals(lastPlashDelaySent[oradSlot])) {
                     controller.sendSetExport(PLACE_SWIMMING_SCENE,
@@ -1518,7 +1742,7 @@ public class RootLayoutController {
 
             double leaderDist = 0;
             for (int l = 0; l < LANES_COUNT; l++) {
-                leaderDist = Math.max(leaderDist, lastTotalDistance[l]);
+                leaderDist = Math.max(leaderDist, toDisplayedDistance(lastTotalDistance[l]));
             }
             int[] ranks = computeRanksByTotalDistance();
 
@@ -1552,10 +1776,11 @@ public class RootLayoutController {
                             .append("}");
                 }
                 sb.append("]");
-                double gp = leaderDist - lastTotalDistance[lane];
+                double displayDistance = toDisplayedDistance(lastTotalDistance[lane]);
+                double gp = leaderDist - displayDistance;
                 sb.append(",\"line_pos\":").append(ranks[lane])
                         .append(",\"line_real_x\":")
-                        .append(String.format(Locale.US, "%.2f", lastTotalDistance[lane]))
+                        .append(String.format(Locale.US, "%.2f", displayDistance))
                         .append(",\"line_gp\":")
                         .append(String.format(Locale.US, "%.2f", gp))
                         .append("}");
@@ -1603,6 +1828,7 @@ public class RootLayoutController {
                         if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xPool != null) {
                             havePoolFrame[laneId] = true;
                             frameXmPool[laneId] = xPool;
+                            logCoordinate("TCP", laneId, xPool);
                         }
                         if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xVal != null) {
                             seenLane[laneId] = true;
@@ -1629,6 +1855,7 @@ public class RootLayoutController {
                 }
             }
             sendPlaceSwimmingPosXRawFromTcpLocked(havePoolFrame, frameXmPool);
+            queuePlaceSwimmingPosXFromTcpFrameLocked(havePoolFrame, frameXmPool);
 
             // Update state for lanes present in this frame (дистанция и UI по x_m).
             for (int lane = 0; lane < LANES_COUNT; lane++) {
@@ -1692,15 +1919,20 @@ public class RootLayoutController {
             // Send exports to RE (if connected).
             if (controller != null) {
                 for (int lane = 0; lane < LANES_COUNT; lane++) {
-                    String dir = lastDirection[lane] == null ? "" : lastDirection[lane];
-                    String distValue = String.format(Locale.US, "%.3f", lastTotalDistance[lane]);
+                    String dir = toDisplayedDirection(lastDirection[lane]);
+                    if (dir == null) {
+                        dir = "";
+                    }
+                    double displayDistance = toDisplayedDistance(lastTotalDistance[lane]);
+                    String distValue = String.format(Locale.US, "%.3f", displayDistance);
 
-                    boolean needSendDist = !hasExportedDistance[lane] || Math.abs(lastTotalDistance[lane] - lastExportedDistance[lane]) > DISTANCE_EXPORT_EPS;
+                    boolean needSendDist = !hasExportedDistance[lane]
+                            || Math.abs(displayDistance - lastExportedDistance[lane]) > DISTANCE_EXPORT_EPS;
                     boolean needSendDir = lastExportedDirection[lane] == null ? !dir.isEmpty() : !lastExportedDirection[lane].equals(dir);
 
                     if (needSendDist) {
                         controller.sendSetExport(RE_SCENE, "distance_lane_" + lane, distValue);
-                        lastExportedDistance[lane] = lastTotalDistance[lane];
+                        lastExportedDistance[lane] = displayDistance;
                         hasExportedDistance[lane] = true;
                     }
 
@@ -1735,7 +1967,7 @@ public class RootLayoutController {
         synchronized (splitsStateLock) {
             double leaderDist = 0;
             for (int lane = 0; lane < LANES_COUNT; lane++) {
-                leaderDist = Math.max(leaderDist, lastTotalDistance[lane]);
+                leaderDist = Math.max(leaderDist, toDisplayedDistance(lastTotalDistance[lane]));
             }
             for (int lane = 0; lane < LANES_COUNT; lane++) {
                 if (positionLabels[lane] != null) {
@@ -1743,14 +1975,16 @@ public class RootLayoutController {
                     positionLabels[lane].setText(rank > 0 ? String.valueOf(rank) : "");
                 }
                 if (distanceLabels[lane] != null) {
-                    distanceLabels[lane].setText(String.format(Locale.US, "%.2f", lastTotalDistance[lane]));
+                    distanceLabels[lane].setText(String.format(Locale.US, "%.2f",
+                            toDisplayedDistance(lastTotalDistance[lane])));
                 }
                 if (gpLabels[lane] != null) {
-                    double gp = leaderDist - lastTotalDistance[lane];
+                    double gp = leaderDist - toDisplayedDistance(lastTotalDistance[lane]);
                     gpLabels[lane].setText(String.format(Locale.US, "%.2f", gp));
                 }
                 if (directionLabels[lane] != null) {
-                    directionLabels[lane].setText(lastDirection[lane] == null ? "" : lastDirection[lane]);
+                    String dir = toDisplayedDirection(lastDirection[lane]);
+                    directionLabels[lane].setText(dir == null ? "" : dir);
                 }
             }
         }
@@ -1999,6 +2233,7 @@ public class RootLayoutController {
         properties.setProperty("oradPositionXMode", ORAD_POS_MODE_BUFFERED_25HZ);
         properties.setProperty("oradPosXOffsetEnabled", "false");
         properties.setProperty("oradPosXOffset", "0");
+        properties.setProperty("coordinateLogToFile", "false");
     }
 
     private void applyLoadedPropertiesToUi() {
