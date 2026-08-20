@@ -10,6 +10,8 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.RowConstraints;
 import javafx.stage.Stage;
 import jssc.SerialPort;
 import jssc.SerialPortEvent;
@@ -68,6 +70,13 @@ public class RootLayoutController {
     private static final double ORAD_NUMBERS_MODE_TIMER_MIN = 15.0;
     private static final double ORAD_NUMBERS_MODE_TIMER_MAX = 55.0;
     private static final int LANES_COUNT = 10;
+    /** Заголовок + 10 дорожек в таблице сплитов. */
+    private static final int SPLITS_TABLE_ROW_COUNT = LANES_COUNT + 1;
+    private static final double SPLITS_TABLE_ROW_HEIGHT = 32.0;
+    private static final double SPLITS_TABLE_VGAP = 8.0;
+    /** Место под горизонтальный скроллбар ScrollPane. */
+    private static final double SPLITS_TABLE_HSCROLL_RESERVE = 18.0;
+    private static final double SPLITS_TABLE_PANE_PADDING = 6.0;
     private static final int TCP_CONNECT_TIMEOUT_MS = 5000;
     private static final int TCP_READ_TIMEOUT_MS = 3000;
     private static final long POSITION_DEBOUNCE_MS = 300;
@@ -2030,6 +2039,8 @@ public class RootLayoutController {
     public void createGridPaneSplits() {
         splits = new GridPane();
         splits.setHgap(10);
+        splits.setVgap(SPLITS_TABLE_VGAP);
+        configureSplitsGridRowConstraints();
         participants.clear();
 
         synchronized (splitsStateLock) {
@@ -2089,6 +2100,7 @@ public class RootLayoutController {
         for (int splitIdx = 0; splitIdx < columns; splitIdx++) {
             int uiCol = splitStartColumn + splitIdx;
             Label newDistanceLabel = new Label((splitIdx + 1) * swimPoolSize + "м");
+            newDistanceLabel.setMinWidth(70);
             GridPane.setHalignment(newDistanceLabel, HPos.CENTER);
             splits.add(newDistanceLabel, uiCol, 0);
         }
@@ -2111,6 +2123,10 @@ public class RootLayoutController {
             for (int splitIdx = 0; splitIdx < columns; splitIdx++) {
                 TextField newTextField = new TextField();
                 newTextField.setPrefWidth(70);
+                newTextField.setMinWidth(70);
+                newTextField.setPrefHeight(SPLITS_TABLE_ROW_HEIGHT);
+                newTextField.setMinHeight(SPLITS_TABLE_ROW_HEIGHT);
+                newTextField.setMaxHeight(SPLITS_TABLE_ROW_HEIGHT);
                 int finalRow = row;
                 int finalSplitIdx = splitIdx;
                 int uiCol = splitStartColumn + splitIdx;
@@ -2149,7 +2165,11 @@ public class RootLayoutController {
             splits.add(gpLabels[laneIdx], gpCol, row);
             splits.add(directionLabels[laneIdx], directionCol, row);
         }
+        splits.setMaxWidth(Region.USE_COMPUTED_SIZE);
+        scrollPaneSplits.setFitToWidth(false);
+        scrollPaneSplits.setFitToHeight(false);
         scrollPaneSplits.setContent(splits);
+        updateSplitsScrollPaneHeight();
 
         if (controller != null && leadersPlaceSwimmingTracking) {
             sendPlaceSwimmingAllGroupMasterVisible(true);
@@ -2157,6 +2177,43 @@ public class RootLayoutController {
                 resetPlaceSwimmingLeaderExportCacheLocked();
                 applyPlaceSwimmingLeaderExportsLocked(true);
             }
+        }
+    }
+
+    private void configureSplitsGridRowConstraints() {
+        splits.getRowConstraints().clear();
+        for (int row = 0; row < SPLITS_TABLE_ROW_COUNT; row++) {
+            RowConstraints rowConstraints = new RowConstraints();
+            rowConstraints.setMinHeight(SPLITS_TABLE_ROW_HEIGHT);
+            rowConstraints.setPrefHeight(SPLITS_TABLE_ROW_HEIGHT);
+            rowConstraints.setMaxHeight(SPLITS_TABLE_ROW_HEIGHT);
+            splits.getRowConstraints().add(rowConstraints);
+        }
+    }
+
+    private double computeSplitsTableContentHeight() {
+        return SPLITS_TABLE_ROW_COUNT * SPLITS_TABLE_ROW_HEIGHT
+                + (SPLITS_TABLE_ROW_COUNT - 1) * SPLITS_TABLE_VGAP;
+    }
+
+    private void updateSplitsScrollPaneHeight() {
+        if (scrollPaneSplits == null || splits == null) {
+            return;
+        }
+        Runnable applyHeight = () -> {
+            double contentHeight = computeSplitsTableContentHeight();
+            scrollPaneSplits.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+            scrollPaneSplits.setPrefViewportHeight(contentHeight);
+            scrollPaneSplits.setMinViewportHeight(contentHeight);
+            double paneHeight = contentHeight + SPLITS_TABLE_HSCROLL_RESERVE + SPLITS_TABLE_PANE_PADDING;
+            scrollPaneSplits.setPrefHeight(paneHeight);
+            scrollPaneSplits.setMinHeight(paneHeight);
+            scrollPaneSplits.setMaxHeight(paneHeight);
+        };
+        if (Platform.isFxApplicationThread()) {
+            applyHeight.run();
+        } else {
+            Platform.runLater(applyHeight);
         }
     }
 

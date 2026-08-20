@@ -1,8 +1,10 @@
 import controllers.RootLayoutController;
 import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
+import javafx.geometry.Rectangle2D;
 import javafx.scene.Scene;
 import javafx.scene.layout.BorderPane;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
 
 import java.io.*;
@@ -28,15 +30,20 @@ public class MainApp extends Application {
                     .getResource("view/RootLayout.fxml"));
             rootLayout = loader.load();
 
-            // Отображаем сцену, содержащую корневой макет.
-            Scene scene = new Scene(rootLayout, 1920, 600);
+            Rectangle2D visualBounds = Screen.getPrimary().getVisualBounds();
+            double sceneWidth = Math.min(1920.0, visualBounds.getWidth());
+            double sceneHeight = Math.min(1080.0, visualBounds.getHeight());
+
+            Scene scene = new Scene(rootLayout, sceneWidth, sceneHeight);
             primaryStage.setScene(scene);
-            primaryStage.minHeightProperty().set(800);
-            primaryStage.minWidthProperty().set(1920);
-            primaryStage.maxHeightProperty().set(1080);
-            primaryStage.maxWidthProperty().set(1920);
-            //primaryStage.getIcons().add(new Image("avt/caspar/client/icons/icons.png")) ;
-            // Даём контроллеру доступ к главному прилодению.
+            primaryStage.setMinWidth(1280);
+            primaryStage.setMinHeight(720);
+            primaryStage.setX(visualBounds.getMinX());
+            primaryStage.setY(visualBounds.getMinY());
+            primaryStage.setWidth(visualBounds.getWidth());
+            primaryStage.setHeight(visualBounds.getHeight());
+            primaryStage.setMaximized(true);
+            // Даём контроллеру доступ к главному приложению.
             controller = loader.getController();
             controller.setPrimaryStage(primaryStage);
             primaryStage.show();
