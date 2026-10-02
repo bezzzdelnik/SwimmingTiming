@@ -177,9 +177,32 @@ public class RootLayoutController {
 
     @FXML private TextField tcpHostField;
     @FXML private TextField tcpPortField;
+    @FXML private TextField tcpHostField2;
+    @FXML private TextField tcpPortField2;
+    private Socket tcpSocket2;
+    private Thread tcpThread2;
+    private volatile boolean tcp1Alive = false;
+    private volatile boolean tcp2Alive = false;
+    private volatile boolean tcpSecondEnabled = false;
+    private final double[][] trackerX = new double[2][LANES_COUNT];
+    private final double[][] trackerPool = new double[2][LANES_COUNT];
+    private final String[][] trackerDir = new String[2][LANES_COUNT];
+    private final long[][] trackerMs = new long[2][LANES_COUNT];
+    private final boolean[][] trackerSeen = new boolean[2][LANES_COUNT];
+    private final boolean[][] trackerPoolSeen = new boolean[2][LANES_COUNT];
+    private final double[] smoothSegX = new double[LANES_COUNT];
+    private final double[] smoothSegVel = new double[LANES_COUNT];
+    private final long[] smoothSegMs = new long[LANES_COUNT];
+    private final boolean[] smoothSegReady = new boolean[LANES_COUNT];
+    private final double[] smoothPoolX = new double[LANES_COUNT];
+    private final double[] smoothPoolVel = new double[LANES_COUNT];
+    private final long[] smoothPoolMs = new long[LANES_COUNT];
+    private final boolean[] smoothPoolReady = new boolean[LANES_COUNT];
     @FXML private Button startTcpButton, stopTcpButton;
     @FXML private Label tcpConnectionLabel;
     @FXML private ImageView tcpConnectionImageView;
+    @FXML private Label tcpConnectionLabel2;
+    @FXML private ImageView tcpConnectionImageView2;
     @FXML private TextField splitsTcpServerPortField;
     @FXML private Button startSplitsTcpServerButton, stopSplitsTcpServerButton;
     @FXML private Label splitsTcpServerStatusLabel, splitsTcpClientsCountLabel;
@@ -294,12 +317,16 @@ public class RootLayoutController {
         // TCP defaults (can be overwritten by config.properties)
         tcpHostField.setText(properties.getProperty("tcpHost", "127.0.0.1"));
         tcpPortField.setText(properties.getProperty("tcpPort", "9000"));
+        if (tcpHostField2 != null) {
+            tcpHostField2.setText(properties.getProperty("tcpHost2", "127.0.0.1"));
+        }
+        if (tcpPortField2 != null) {
+            tcpPortField2.setText(properties.getProperty("tcpPort2", ""));
+        }
         stopTcpButton.setDisable(true);
         startTcpButton.setDisable(false);
-        tcpConnectionLabel.setText("TCP Disconnected");
-        if (tcpConnectionImageView != null) {
-            tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(discon)));
-        }
+        updateTcpSlotUi(1, "TCP 1 Disconnected", false);
+        updateTcpSlotUi(2, secondPortText().isEmpty() ? "TCP 2 off" : "TCP 2 Disconnected", false);
 
         tcpHostField.textProperty().addListener((observable, oldValue, newValue) -> {
             if (newValue != null) setProperties("tcpHost", newValue);
@@ -314,6 +341,21 @@ public class RootLayoutController {
             } catch (NumberFormatException ignored) {
             }
         });
+        if (tcpHostField2 != null) {
+            tcpHostField2.textProperty().addListener((observable, oldValue, newValue) -> {
+                if (newValue != null) setProperties("tcpHost2", newValue);
+            });
+        }
+        if (tcpPortField2 != null) {
+            tcpPortField2.textProperty().addListener((observable, oldValue, newValue) -> {
+                if (newValue == null) return;
+                String v = newValue.trim();
+                setProperties("tcpPort2", v);
+                if (!tcpRunning) {
+                    updateTcpSlotUi(2, v.isEmpty() ? "TCP 2 off" : "TCP 2 Disconnected", false);
+                }
+            });
+        }
 
         if (splitsTcpServerPortField != null) {
             splitsTcpServerPortField.setText(properties.getProperty("splitsTcpServerPort", "9100"));
@@ -569,82 +611,155 @@ public class RootLayoutController {
         if (tcpRunning) return;
 
         String host = tcpHostField.getText() == null ? "127.0.0.1" : tcpHostField.getText().trim();
+        if (host.isEmpty()) host = "127.0.0.1";
         int port;
         try {
             port = Integer.parseInt(tcpPortField.getText().trim());
         } catch (Exception ex) {
-            updateTcpConnectionUi("TCP bad port", false);
+            updateTcpSlotUi(1, "TCP 1 bad port", false);
             return;
         }
 
+        final String host2 = tcpHostField2 == null || tcpHostField2.getText() == null
+                || tcpHostField2.getText().trim().isEmpty()
+                ? host : tcpHostField2.getText().trim();
+        final String port2Text = secondPortText();
+        final boolean useSecond = !port2Text.isEmpty();
+        int port2 = 0;
+        if (useSecond) {
+            try {
+                port2 = Integer.parseInt(port2Text);
+            } catch (Exception ex) {
+                updateTcpSlotUi(2, "TCP 2 bad port", false);
+                return;
+            }
+        }
+
+        for (int src = 0; src < 2; src++) {
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                trackerSeen[src][lane] = false;
+                trackerPoolSeen[src][lane] = false;
+            }
+        }
+
         tcpRunning = true;
-        updateTcpConnectionUi("TCP Connecting...", false);
+        tcpSecondEnabled = useSecond;
+        tcp1Alive = true;
+        tcp2Alive = useSecond;
+        updateTcpSlotUi(1, "TCP 1 Connecting...", false);
+        if (useSecond) {
+            updateTcpSlotUi(2, "TCP 2 Connecting...", false);
+        } else {
+            updateTcpSlotUi(2, "TCP 2 off", false);
+        }
         if (startTcpButton != null) startTcpButton.setDisable(true);
         if (stopTcpButton != null) stopTcpButton.setDisable(false);
 
-        tcpThread = new Thread(() -> {
-            String disconnectReason = "TCP Disconnected";
-            try {
-                Socket socket = new Socket();
-                socket.connect(new InetSocketAddress(host, port), TCP_CONNECT_TIMEOUT_MS);
-                socket.setTcpNoDelay(true);
-                socket.setSoTimeout(TCP_READ_TIMEOUT_MS);
-                tcpSocket = socket;
-
-                Platform.runLater(() -> updateTcpConnectionUi("TCP Connected", true));
-
-                InputStream inputStream = socket.getInputStream();
-                byte[] buffer = new byte[8192];
-                StringBuilder streamBuffer = new StringBuilder();
-
-                while (tcpRunning && !Thread.currentThread().isInterrupted()) {
-                    int read;
-                    try {
-                        read = inputStream.read(buffer);
-                    } catch (SocketTimeoutException timeout) {
-                        if (!tcpRunning || socket.isClosed() || !socket.isConnected()) {
-                            break;
-                        }
-                        continue;
-                    }
-
-                    if (read < 0) {
-                        disconnectReason = "TCP server closed connection";
-                        break;
-                    }
-                    if (read == 0) {
-                        continue;
-                    }
-
-                    streamBuffer.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
-                    parseTcpJsonObjectsFromBuffer(streamBuffer);
-                }
-            } catch (ConnectException ex) {
-                disconnectReason = "TCP server unavailable";
-            } catch (SocketTimeoutException ex) {
-                disconnectReason = "TCP connect timeout";
-            } catch (IOException ex) {
-                if (tcpRunning) {
-                    disconnectReason = "TCP error: " + ex.getClass().getSimpleName();
-                }
-            } catch (Exception ex) {
-                disconnectReason = "TCP error: " + ex.getClass().getSimpleName();
-            } finally {
-                closeTcpSocketQuietly();
-                tcpRunning = false;
-                final String status = disconnectReason;
-                Platform.runLater(() -> {
-                    if (startTcpButton != null) startTcpButton.setDisable(false);
-                    if (stopTcpButton != null) stopTcpButton.setDisable(true);
-                    updateTcpConnectionUi(status, false);
-                });
-            }
-        }, "tcp-json-reader");
+        final String host1Final = host;
+        final int port1Final = port;
+        tcpThread = new Thread(() -> runTrackerTcp(host1Final, port1Final, 0), "tcp-json-reader");
         tcpThread.setDaemon(true);
         tcpThread.start();
+
+        if (useSecond) {
+            final int port2Final = port2;
+            tcpThread2 = new Thread(() -> runTrackerTcp(host2, port2Final, 1), "tcp-json-reader-2");
+            tcpThread2.setDaemon(true);
+            tcpThread2.start();
+        }
     }
 
-    private void parseTcpJsonObjectsFromBuffer(StringBuilder streamBuffer) {
+    private String secondPortText() {
+        if (tcpPortField2 == null || tcpPortField2.getText() == null) {
+            return "";
+        }
+        return tcpPortField2.getText().trim();
+    }
+
+    private void runTrackerTcp(String host, int port, int source) {
+        String disconnectReason = source == 0 ? "TCP 1 Disconnected" : "TCP 2 Disconnected";
+        Socket socket = null;
+        try {
+            socket = new Socket();
+            socket.connect(new InetSocketAddress(host, port), TCP_CONNECT_TIMEOUT_MS);
+            socket.setTcpNoDelay(true);
+            socket.setSoTimeout(TCP_READ_TIMEOUT_MS);
+            if (source == 0) {
+                tcpSocket = socket;
+            } else {
+                tcpSocket2 = socket;
+            }
+            final String connected = source == 0 ? "TCP 1 Connected" : "TCP 2 Connected";
+            Platform.runLater(() -> updateTcpSlotUi(source + 1, connected, true));
+
+            InputStream inputStream = socket.getInputStream();
+            byte[] buffer = new byte[8192];
+            StringBuilder streamBuffer = new StringBuilder();
+            while (tcpRunning && !Thread.currentThread().isInterrupted()) {
+                int read;
+                try {
+                    read = inputStream.read(buffer);
+                } catch (SocketTimeoutException timeout) {
+                    if (!tcpRunning || socket.isClosed() || !socket.isConnected()) {
+                        break;
+                    }
+                    continue;
+                }
+                if (read < 0) {
+                    disconnectReason = source == 0 ? "TCP 1 server closed" : "TCP 2 server closed";
+                    break;
+                }
+                if (read == 0) {
+                    continue;
+                }
+                streamBuffer.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
+                parseTcpJsonObjectsFromBuffer(streamBuffer, source);
+            }
+        } catch (ConnectException ex) {
+            disconnectReason = source == 0 ? "TCP 1 server unavailable" : "TCP 2 server unavailable";
+        } catch (SocketTimeoutException ex) {
+            disconnectReason = source == 0 ? "TCP 1 connect timeout" : "TCP 2 connect timeout";
+        } catch (IOException ex) {
+            if (tcpRunning) {
+                disconnectReason = (source == 0 ? "TCP 1 error: " : "TCP 2 error: ") + ex.getClass().getSimpleName();
+            }
+        } catch (Exception ex) {
+            disconnectReason = (source == 0 ? "TCP 1 error: " : "TCP 2 error: ") + ex.getClass().getSimpleName();
+        } finally {
+            if (source == 0) {
+                closeTcpSocketQuietly();
+                tcp1Alive = false;
+            } else {
+                closeTcpSocket2Quietly();
+                tcp2Alive = false;
+            }
+            final String status = disconnectReason;
+            final int slot = source + 1;
+            Platform.runLater(() -> {
+                updateTcpSlotUi(slot, status, false);
+                if (!tcp1Alive && !tcp2Alive) {
+                    tcpRunning = false;
+                    tcpSecondEnabled = false;
+                    if (startTcpButton != null) startTcpButton.setDisable(false);
+                    if (stopTcpButton != null) stopTcpButton.setDisable(true);
+                }
+            });
+        }
+    }
+
+    private void closeTcpSocket2Quietly() {
+        Socket socket = tcpSocket2;
+        tcpSocket2 = null;
+        if (socket == null) {
+            return;
+        }
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+        }
+    }
+
+    private void parseTcpJsonObjectsFromBuffer(StringBuilder streamBuffer, int source) {
         while (true) {
             int startIdx = streamBuffer.indexOf("{");
             if (startIdx < 0) {
@@ -665,7 +780,7 @@ public class RootLayoutController {
                     streamBuffer.delete(0, i + 1);
                     foundEnd = true;
                     try {
-                        handleTcpJson(jsonObj);
+                        handleTcpJson(jsonObj, source);
                     } catch (Exception ex) {
                         // Bad frame must not kill the reader thread.
                     }
@@ -699,19 +814,25 @@ public class RootLayoutController {
         }
     }
 
-    private void updateTcpConnectionUi(String status, boolean connected) {
-        if (tcpConnectionLabel != null) {
-            tcpConnectionLabel.setText(status);
+    private void updateTcpSlotUi(int slot, String status, boolean connected) {
+        Label label = slot == 2 ? tcpConnectionLabel2 : tcpConnectionLabel;
+        ImageView image = slot == 2 ? tcpConnectionImageView2 : tcpConnectionImageView;
+        if (label != null) {
+            label.setText(status);
         }
-        if (tcpConnectionImageView != null) {
-            tcpConnectionImageView.setImage(new Image(getClass().getResourceAsStream(connected ? con : discon)));
+        if (image != null) {
+            image.setImage(new Image(getClass().getResourceAsStream(connected ? con : discon)));
         }
     }
 
     @FXML
     private void stopTcp() {
         tcpRunning = false;
+        tcpSecondEnabled = false;
+        tcp1Alive = false;
+        tcp2Alive = false;
         closeTcpSocketQuietly();
+        closeTcpSocket2Quietly();
 
         Thread thread = tcpThread;
         if (thread != null) {
@@ -723,12 +844,23 @@ public class RootLayoutController {
             }
             tcpThread = null;
         }
+        Thread thread2 = tcpThread2;
+        if (thread2 != null) {
+            thread2.interrupt();
+            try {
+                thread2.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            tcpThread2 = null;
+        }
 
         if (startTcpButton != null && stopTcpButton != null) {
             startTcpButton.setDisable(false);
             stopTcpButton.setDisable(true);
         }
-        updateTcpConnectionUi("TCP Disconnected", false);
+        updateTcpSlotUi(1, "TCP 1 Disconnected", false);
+        updateTcpSlotUi(2, secondPortText().isEmpty() ? "TCP 2 off" : "TCP 2 Disconnected", false);
     }
 
     @FXML
@@ -1803,7 +1935,7 @@ public class RootLayoutController {
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    private void handleTcpJson(String jsonObj) {
+    private void handleTcpJson(String jsonObj, int source) {
         // Remove spaces/new lines as requested (this also keeps parsing simpler).
         String cleaned = jsonObj.replaceAll("[\\s\\r\\n\\t]+", "");
 
@@ -1855,12 +1987,66 @@ public class RootLayoutController {
         }
 
         long now = System.currentTimeMillis();
+        if (tcpSecondEnabled) {
+            final int src = source == 1 ? 1 : 0;
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                if (seenLane[lane]) {
+                    trackerX[src][lane] = frameX[lane];
+                    trackerDir[src][lane] = frameDirections[lane];
+                    trackerMs[src][lane] = now;
+                    trackerSeen[src][lane] = true;
+                }
+                if (havePoolFrame[lane]) {
+                    trackerPool[src][lane] = frameXmPool[lane];
+                    trackerPoolSeen[src][lane] = true;
+                    trackerMs[src][lane] = now;
+                }
+                final boolean fresh0 = trackerSeen[0][lane] && now - trackerMs[0][lane] < 300;
+                final boolean fresh1 = trackerSeen[1][lane] && now - trackerMs[1][lane] < 300;
+                if (fresh0 && fresh1) {
+                    seenLane[lane] = true;
+                    frameX[lane] = 0.5 * (trackerX[0][lane] + trackerX[1][lane]);
+                    frameDirections[lane] = trackerDir[src][lane];
+                } else if (fresh0) {
+                    seenLane[lane] = true;
+                    frameX[lane] = trackerX[0][lane];
+                    frameDirections[lane] = trackerDir[0][lane];
+                } else if (fresh1) {
+                    seenLane[lane] = true;
+                    frameX[lane] = trackerX[1][lane];
+                    frameDirections[lane] = trackerDir[1][lane];
+                }
+                final boolean pool0 = fresh0 && trackerPoolSeen[0][lane];
+                final boolean pool1 = fresh1 && trackerPoolSeen[1][lane];
+                if (pool0 && pool1) {
+                    havePoolFrame[lane] = true;
+                    frameXmPool[lane] = 0.5 * (trackerPool[0][lane] + trackerPool[1][lane]);
+                } else if (pool0) {
+                    havePoolFrame[lane] = true;
+                    frameXmPool[lane] = trackerPool[0][lane];
+                } else if (pool1) {
+                    havePoolFrame[lane] = true;
+                    frameXmPool[lane] = trackerPool[1][lane];
+                }
+            }
+        }
 
         synchronized (splitsStateLock) {
             for (int lane = 0; lane < LANES_COUNT; lane++) {
                 if (havePoolFrame[lane]) {
                     lastTcpXmPoolForOrad[lane] = frameXmPool[lane];
                     hasLastTcpXmPoolForOrad[lane] = true;
+                }
+            }
+            final double poolAxis = swimPoolSize > 0 ? swimPoolSize : 50;
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                if (seenLane[lane]) {
+                    frameX[lane] = smoothSwimmerAxis(lane, frameX[lane], poolAxis,
+                            smoothSegX, smoothSegVel, smoothSegMs, smoothSegReady);
+                }
+                if (havePoolFrame[lane]) {
+                    frameXmPool[lane] = smoothSwimmerAxis(lane, frameXmPool[lane], poolAxis,
+                            smoothPoolX, smoothPoolVel, smoothPoolMs, smoothPoolReady);
                 }
             }
             sendPlaceSwimmingPosXRawFromTcpLocked(havePoolFrame, frameXmPool);
@@ -1972,6 +2158,32 @@ public class RootLayoutController {
         }
     }
 
+    private double smoothSwimmerAxis(int lane, double measurement, double maxMeters,
+                                     double[] position, double[] velocity, long[] stamp, boolean[] ready) {
+        final long nowMs = System.currentTimeMillis();
+        measurement = Math.max(0, Math.min(maxMeters, measurement));
+        if (!ready[lane]) {
+            position[lane] = measurement;
+            velocity[lane] = 0;
+            stamp[lane] = nowMs;
+            ready[lane] = true;
+            return position[lane];
+        }
+        final double dt = Math.max(0.02, Math.min(0.20, (nowMs - stamp[lane]) / 1000.0));
+        stamp[lane] = nowMs;
+        final double predicted = position[lane] + velocity[lane] * dt;
+        final double error = measurement - predicted;
+        final double gain = Math.abs(error) > 0.8 ? 0.12 : 0.45;
+        double step = (predicted + gain * error) - position[lane];
+        final double maxStep = 2.4 * dt;
+        if (Math.abs(step) > maxStep) {
+            step = Math.copySign(maxStep, step);
+        }
+        velocity[lane] = Math.max(-2.4, Math.min(2.4, 0.86 * velocity[lane] + 0.14 * (step / dt)));
+        position[lane] = Math.max(0, Math.min(maxMeters, position[lane] + step));
+        return position[lane];
+    }
+
     private void updateSplitUiFromState() {
         synchronized (splitsStateLock) {
             double leaderDist = 0;
@@ -2056,6 +2268,10 @@ public class RootLayoutController {
                 lastTcpXmPoolForOrad[lane] = 0;
                 hasLastTcpXmPoolForOrad[lane] = false;
                 lastDirection[lane] = null;
+                smoothSegReady[lane] = false;
+                smoothPoolReady[lane] = false;
+                smoothSegVel[lane] = 0;
+                smoothPoolVel[lane] = 0;
 
                 displayedRanks[lane] = 0;
                 lastExportedDistance[lane] = 0;
@@ -2285,6 +2501,8 @@ public class RootLayoutController {
         properties.setProperty("encoding", "UTF-8");
         properties.setProperty("tcpHost", "127.0.0.1");
         properties.setProperty("tcpPort", "9000");
+        properties.setProperty("tcpHost2", "127.0.0.1");
+        properties.setProperty("tcpPort2", "");
         properties.setProperty("splitsTcpServerPort", "9100");
         properties.setProperty("tracksTcpServerPort", "9101");
         properties.setProperty("oradPositionXMode", ORAD_POS_MODE_BUFFERED_25HZ);
