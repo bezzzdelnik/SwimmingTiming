@@ -36,8 +36,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Properties;
@@ -45,8 +48,10 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -80,7 +85,12 @@ public class RootLayoutController {
     private static final int TCP_CONNECT_TIMEOUT_MS = 5000;
     private static final int TCP_READ_TIMEOUT_MS = 3000;
     private static final long POSITION_DEBOUNCE_MS = 300;
-    private static final double DISTANCE_EXPORT_EPS = 0.05; // meters
+    /**
+     * Was 0.05m — skipped lanes/frames and split ORAD ticks.
+     * Frame-aligned export: every TCP frame sends a full distance pack (EPS unused).
+     */
+    /** 0 = one full distance pack on every accepted video frame_id (ORAD paced by frame). */
+    private static final double DISTANCE_EXPORT_EPS = 0.0;
     private static final double ORAD_POS_X_OFFSET_MIN = -100.0;
     private static final double ORAD_POS_X_OFFSET_MAX = 100.0;
     private static final int ORAD_POSITION_EXPORT_HZ = 25;
@@ -145,6 +155,11 @@ public class RootLayoutController {
     private final Pattern xPattern = Pattern.compile("\"x_m\":([-0-9\\.Ee]+)");
     private final Pattern xPoolPattern = Pattern.compile("\"x_m_pool\":([-0-9\\.Ee]+)");
     private final Pattern directionPattern = Pattern.compile("\"direction\":\"(left|right)\"");
+    private final Pattern frameIdPattern = Pattern.compile("\"frame_id\":(-?\\d+)");
+    private final Pattern captureTsPattern = Pattern.compile("\"capture_timestamp\":\"([^\"]+)\"");
+    private final Pattern processingTsPattern = Pattern.compile("\"timestamp\":\"([^\"]+)\"");
+    private final Pattern nominalPeriodPattern = Pattern.compile("\"nominal_frame_period_ms\":(\\d+)");
+    private final Pattern interpolatedPattern = Pattern.compile("\"interpolated\":(true|false)");
     private ServerSocket splitsTcpServerSocket;
     private Thread splitsTcpServerThread;
     private volatile boolean splitsTcpServerRunning = false;
@@ -184,12 +199,27 @@ public class RootLayoutController {
     private volatile boolean tcp1Alive = false;
     private volatile boolean tcp2Alive = false;
     private volatile boolean tcpSecondEnabled = false;
+    /** Legacy per-lane wall-clock buffers (fallback if video-frame meta missing). */
     private final double[][] trackerX = new double[2][LANES_COUNT];
     private final double[][] trackerPool = new double[2][LANES_COUNT];
     private final String[][] trackerDir = new String[2][LANES_COUNT];
     private final long[][] trackerMs = new long[2][LANES_COUNT];
     private final boolean[][] trackerSeen = new boolean[2][LANES_COUNT];
     private final boolean[][] trackerPoolSeen = new boolean[2][LANES_COUNT];
+    /** Dual-TCP merge by video frame (frame_id / capture_timestamp). */
+    private final Object videoFrameMergeLock = new Object();
+    private final TrackerVideoSample[] trackerVideoSamples = new TrackerVideoSample[2];
+    private final ScheduledFuture<?>[] trackerVideoFlushFutures = new ScheduledFuture<?>[2];
+    private final AtomicLong trackerVideoFlushGeneration = new AtomicLong();
+    private ScheduledExecutorService videoFrameMergeExecutor;
+    private long lastAppliedVideoFrameId = Long.MIN_VALUE;
+    private long lastAppliedCaptureEpochMs = Long.MIN_VALUE;
+    /** Previous accepted ORAD pack timings (for dt_* in coordinates log). */
+    private long lastOradLogFrameId = Long.MIN_VALUE;
+    private long lastOradLogCaptureMs = Long.MIN_VALUE;
+    private long lastOradLogWallMs = Long.MIN_VALUE;
+    private static final int DEFAULT_VIDEO_FRAME_PERIOD_MS = 40;
+    private static final int VIDEO_FRAME_MATCH_WAIT_MS = 20;
     private final double[] smoothSegX = new double[LANES_COUNT];
     private final double[] smoothSegVel = new double[LANES_COUNT];
     private final long[] smoothSegMs = new long[LANES_COUNT];
@@ -655,6 +685,7 @@ public class RootLayoutController {
         if (startTcpButton != null) startTcpButton.setDisable(true);
         if (stopTcpButton != null) stopTcpButton.setDisable(false);
 
+        startVideoFrameMergeExecutor();
         final String host1Final = host;
         final int port1Final = port;
         tcpThread = new Thread(() -> runTrackerTcp(host1Final, port1Final, 0), "tcp-json-reader");
@@ -740,6 +771,7 @@ public class RootLayoutController {
                 if (!tcp1Alive && !tcp2Alive) {
                     tcpRunning = false;
                     tcpSecondEnabled = false;
+                    stopVideoFrameMergeExecutor();
                     if (startTcpButton != null) startTcpButton.setDisable(false);
                     if (stopTcpButton != null) stopTcpButton.setDisable(true);
                 }
@@ -831,6 +863,7 @@ public class RootLayoutController {
         tcpSecondEnabled = false;
         tcp1Alive = false;
         tcp2Alive = false;
+        stopVideoFrameMergeExecutor();
         closeTcpSocketQuietly();
         closeTcpSocket2Quietly();
 
@@ -1050,9 +1083,95 @@ public class RootLayoutController {
         return String.format(Locale.US, "%.6f", oradPosXForExport(rawXmPool));
     }
 
-    private void logCoordinate(String source, int lane, double coordinate) {
-        String line = String.format(Locale.US, "%s source=%s lane=%d coordinate=%.6f",
-                LocalDateTime.now().format(COORDINATE_LOG_TIMESTAMP), source, lane, coordinate);
+    private void logCoordinate(String source, int lane, Double xmPool, Double xmProgress) {
+        logCoordinate(source, lane, xmPool, xmProgress, null, null);
+    }
+
+    private void logCoordinate(String source, int lane, Double xmPool, Double xmProgress,
+                               Long frameId, Long captureEpochMs) {
+        if (!isCoordinateLogToFileEnabled()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder(128);
+        sb.append(LocalDateTime.now().format(COORDINATE_LOG_TIMESTAMP))
+                .append(" source=").append(source)
+                .append(" lane=").append(lane);
+        if (xmPool != null) {
+            sb.append(String.format(Locale.US, " x_m_pool=%.6f", xmPool));
+        }
+        if (xmProgress != null) {
+            sb.append(String.format(Locale.US, " x_m=%.6f", xmProgress));
+        }
+        if (frameId != null) {
+            sb.append(" frame_id=").append(frameId);
+        }
+        if (captureEpochMs != null) {
+            sb.append(" capture_ts_ms=").append(captureEpochMs);
+        }
+        writeCoordinateLogLine(sb.toString());
+    }
+
+    /** Лог фактического значения Position_X, ушедшего в ORAD (после offset). */
+    private void logOradPositionX(int lane, int oradSlot, String exportName,
+                                  double rawXmPool, String exportValue) {
+        if (!isCoordinateLogToFileEnabled()) {
+            return;
+        }
+        String line = String.format(Locale.US,
+                "%s source=ORAD lane=%d orad_slot=%d export=%s x_m_pool=%.6f orad_position_x=%s",
+                LocalDateTime.now().format(COORDINATE_LOG_TIMESTAMP),
+                lane, oradSlot, exportName, rawXmPool, exportValue);
+        writeCoordinateLogLine(line);
+    }
+
+    /**
+     * One line per accepted video frame sent to ORAD, with timing deltas.
+     * Expect {@code dt_capture_ms≈40} and {@code d_frame_id=1} at 25 Hz.
+     */
+    private void logOradFrameTiming(long frameId, long captureEpochMs, int source) {
+        if (!isCoordinateLogToFileEnabled()) {
+            return;
+        }
+        long wall = System.currentTimeMillis();
+        StringBuilder sb = new StringBuilder(160);
+        sb.append(LocalDateTime.now().format(COORDINATE_LOG_TIMESTAMP))
+                .append(" source=ORAD_FRAME src=").append(source);
+        if (frameId != Long.MIN_VALUE) {
+            sb.append(" frame_id=").append(frameId);
+        } else {
+            sb.append(" frame_id=none");
+        }
+        if (captureEpochMs != Long.MIN_VALUE) {
+            sb.append(" capture_ts_ms=").append(captureEpochMs);
+        } else {
+            sb.append(" capture_ts_ms=none");
+        }
+        if (captureEpochMs != Long.MIN_VALUE && lastOradLogCaptureMs != Long.MIN_VALUE) {
+            sb.append(" dt_capture_ms=").append(captureEpochMs - lastOradLogCaptureMs);
+        } else {
+            sb.append(" dt_capture_ms=none");
+        }
+        if (lastOradLogWallMs != Long.MIN_VALUE) {
+            sb.append(" dt_wall_ms=").append(wall - lastOradLogWallMs);
+        } else {
+            sb.append(" dt_wall_ms=none");
+        }
+        if (frameId != Long.MIN_VALUE && lastOradLogFrameId != Long.MIN_VALUE) {
+            sb.append(" d_frame_id=").append(frameId - lastOradLogFrameId);
+        } else {
+            sb.append(" d_frame_id=none");
+        }
+        writeCoordinateLogLine(sb.toString());
+        if (frameId != Long.MIN_VALUE) {
+            lastOradLogFrameId = frameId;
+        }
+        if (captureEpochMs != Long.MIN_VALUE) {
+            lastOradLogCaptureMs = captureEpochMs;
+        }
+        lastOradLogWallMs = wall;
+    }
+
+    private void writeCoordinateLogLine(String line) {
         synchronized (coordinateLogLock) {
             if (coordinateLogWriter == null) {
                 return;
@@ -1095,9 +1214,15 @@ public class RootLayoutController {
                 String fileName = "coordinates-" +
                         LocalDateTime.now().format(COORDINATE_LOG_FILE_TIMESTAMP) + ".log";
                 coordinateLogWriter = Files.newBufferedWriter(logDirectory.resolve(fileName), StandardCharsets.UTF_8);
-                coordinateLogWriter.write("timestamp source lane coordinate");
+                coordinateLogWriter.write(
+                        "timestamp source lane x_m_pool x_m frame_id capture_ts_ms"
+                                + " | ORAD_FRAME: frame_id capture_ts_ms dt_capture_ms dt_wall_ms d_frame_id"
+                                + " | ORAD: orad_slot export orad_position_x");
                 coordinateLogWriter.newLine();
                 coordinateLogWriter.flush();
+                lastOradLogFrameId = Long.MIN_VALUE;
+                lastOradLogCaptureMs = Long.MIN_VALUE;
+                lastOradLogWallMs = Long.MIN_VALUE;
             } catch (Exception ex) {
                 coordinateLogWriter = null;
                 System.out.println("Coordinate log file init failed: " + ex.getMessage());
@@ -1479,7 +1604,7 @@ public class RootLayoutController {
                     String suf = plashGroupSuffix(oradSlot);
                     String exportName = "Transformation_Plash-Group-" + suf + "_Position_X";
                     String exportValue = formatOradPosXExport(posX);
-                    logCoordinate("ORAD", srcLane, oradPosXForExport(posX));
+                    logOradPositionX(srcLane, oradSlot, exportName, posX, exportValue);
                     controller.sendSetExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
                     lastPlashPosXSent[oradSlot] = posX;
                     lastPlashPosXInitialized[oradSlot] = true;
@@ -1548,7 +1673,7 @@ public class RootLayoutController {
     }
 
     private void scheduleDuplicatePositionXExport(String scene, String exportName, String exportValue,
-                                                  int lane, double coordinate) {
+                                                  int lane, int oradSlot, double rawXmPool) {
         ScheduledExecutorService duplicateExecutor = placeSwimmingPosDuplicateExecutor;
         if (duplicateExecutor == null) {
             return;
@@ -1558,7 +1683,7 @@ public class RootLayoutController {
             if (currentController == null || !leadersPlaceSwimmingTracking) {
                 return;
             }
-            logCoordinate("ORAD", lane, coordinate);
+            logOradPositionX(lane, oradSlot, exportName, rawXmPool, exportValue);
             currentController.sendSetExport(scene, exportName, exportValue);
         }, ORAD_POSITION_DUPLICATE_DELAY_MS, TimeUnit.MILLISECONDS);
     }
@@ -1582,11 +1707,12 @@ public class RootLayoutController {
             }
             String suf = plashGroupSuffix(oradSlot);
             String exportName = "Transformation_Plash-Group-" + suf + "_Position_X";
-            String exportValue = formatOradPosXExport(frameXmPool[srcLane]);
-            double coordinate = oradPosXForExport(frameXmPool[srcLane]);
-            logCoordinate("ORAD", srcLane, coordinate);
+            double rawXmPool = frameXmPool[srcLane];
+            String exportValue = formatOradPosXExport(rawXmPool);
+            logOradPositionX(srcLane, oradSlot, exportName, rawXmPool, exportValue);
             controller.sendSetExport(PLACE_SWIMMING_SCENE, exportName, exportValue);
-            scheduleDuplicatePositionXExport(PLACE_SWIMMING_SCENE, exportName, exportValue, srcLane, coordinate);
+            scheduleDuplicatePositionXExport(PLACE_SWIMMING_SCENE, exportName, exportValue,
+                    srcLane, oradSlot, rawXmPool);
             lastPlashPosXSent[oradSlot] = frameXmPool[srcLane];
             lastPlashPosXInitialized[oradSlot] = true;
         }
@@ -1945,6 +2071,12 @@ public class RootLayoutController {
         double[] frameXmPool = new double[LANES_COUNT];
         String[] frameDirections = new String[LANES_COUNT];
 
+        Long frameId = extractLong(frameIdPattern, cleaned);
+        Long captureEpochMs = parseIsoToEpochMs(extractString(captureTsPattern, cleaned));
+        Long processingEpochMs = parseIsoToEpochMs(extractString(processingTsPattern, cleaned));
+        Integer nominalPeriodMs = extractInt(nominalPeriodPattern, cleaned);
+        boolean interpolated = "true".equalsIgnoreCase(extractString(interpolatedPattern, cleaned));
+
         int swimmersStart = cleaned.indexOf("\"swimmers\":[");
         if (swimmersStart < 0) return;
 
@@ -1969,12 +2101,15 @@ public class RootLayoutController {
                         if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xPool != null) {
                             havePoolFrame[laneId] = true;
                             frameXmPool[laneId] = xPool;
-                            logCoordinate("TCP", laneId, xPool);
                         }
                         if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xVal != null) {
                             seenLane[laneId] = true;
                             frameX[laneId] = xVal;
                             frameDirections[laneId] = extractString(directionPattern, swimmerObj);
+                        }
+                        if (laneId != null && laneId >= 0 && laneId < LANES_COUNT
+                                && (xPool != null || xVal != null)) {
+                            logCoordinate("TCP", laneId, xPool, xVal, frameId, captureEpochMs);
                         }
                         break;
                     }
@@ -1986,50 +2121,155 @@ public class RootLayoutController {
             }
         }
 
-        long now = System.currentTimeMillis();
-        if (tcpSecondEnabled) {
-            final int src = source == 1 ? 1 : 0;
-            for (int lane = 0; lane < LANES_COUNT; lane++) {
-                if (seenLane[lane]) {
-                    trackerX[src][lane] = frameX[lane];
-                    trackerDir[src][lane] = frameDirections[lane];
-                    trackerMs[src][lane] = now;
-                    trackerSeen[src][lane] = true;
-                }
-                if (havePoolFrame[lane]) {
-                    trackerPool[src][lane] = frameXmPool[lane];
-                    trackerPoolSeen[src][lane] = true;
-                    trackerMs[src][lane] = now;
-                }
-                final boolean fresh0 = trackerSeen[0][lane] && now - trackerMs[0][lane] < 300;
-                final boolean fresh1 = trackerSeen[1][lane] && now - trackerMs[1][lane] < 300;
-                if (fresh0 && fresh1) {
-                    seenLane[lane] = true;
-                    frameX[lane] = 0.5 * (trackerX[0][lane] + trackerX[1][lane]);
-                    frameDirections[lane] = trackerDir[src][lane];
-                } else if (fresh0) {
-                    seenLane[lane] = true;
-                    frameX[lane] = trackerX[0][lane];
-                    frameDirections[lane] = trackerDir[0][lane];
-                } else if (fresh1) {
-                    seenLane[lane] = true;
-                    frameX[lane] = trackerX[1][lane];
-                    frameDirections[lane] = trackerDir[1][lane];
-                }
-                final boolean pool0 = fresh0 && trackerPoolSeen[0][lane];
-                final boolean pool1 = fresh1 && trackerPoolSeen[1][lane];
-                if (pool0 && pool1) {
-                    havePoolFrame[lane] = true;
-                    frameXmPool[lane] = 0.5 * (trackerPool[0][lane] + trackerPool[1][lane]);
-                } else if (pool0) {
-                    havePoolFrame[lane] = true;
-                    frameXmPool[lane] = trackerPool[0][lane];
-                } else if (pool1) {
-                    havePoolFrame[lane] = true;
-                    frameXmPool[lane] = trackerPool[1][lane];
-                }
+        TrackerVideoSample sample = TrackerVideoSample.fromParsed(
+                source, frameId, captureEpochMs, processingEpochMs, nominalPeriodMs, interpolated,
+                seenLane, frameX, havePoolFrame, frameXmPool, frameDirections);
+        ingestTrackerVideoSample(sample);
+    }
+
+    private void ingestTrackerVideoSample(TrackerVideoSample sample) {
+        if (sample == null) {
+            return;
+        }
+        if (!tcpSecondEnabled) {
+            applyTrackerVideoSample(sample);
+            return;
+        }
+
+        final int src = sample.source == 1 ? 1 : 0;
+        sample.source = src;
+        boolean hasVideoKey = sample.frameId != Long.MIN_VALUE || sample.captureEpochMs != Long.MIN_VALUE;
+        if (!hasVideoKey) {
+            // Fallback: old wall-clock average when tracker does not send video meta.
+            applyLegacyWallClockMerge(sample);
+            return;
+        }
+
+        TrackerVideoSample merged = null;
+        synchronized (videoFrameMergeLock) {
+            cancelVideoFrameFlush(src);
+            trackerVideoSamples[src] = sample;
+            TrackerVideoSample other = trackerVideoSamples[1 - src];
+            if (other != null && videoFramesMatch(sample, other)) {
+                cancelVideoFrameFlush(1 - src);
+                merged = mergeVideoSamples(sample, other);
+                trackerVideoSamples[0] = null;
+                trackerVideoSamples[1] = null;
+            } else {
+                scheduleVideoFrameFlush(src, sample);
             }
         }
+        if (merged != null) {
+            applyTrackerVideoSample(merged);
+        }
+    }
+
+    private void applyLegacyWallClockMerge(TrackerVideoSample sample) {
+        boolean[] seenLane = sample.seenLane.clone();
+        double[] frameX = sample.frameX.clone();
+        boolean[] havePoolFrame = sample.havePoolFrame.clone();
+        double[] frameXmPool = sample.frameXmPool.clone();
+        String[] frameDirections = sample.frameDirections.clone();
+        long now = System.currentTimeMillis();
+        final int src = sample.source == 1 ? 1 : 0;
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            if (seenLane[lane]) {
+                trackerX[src][lane] = frameX[lane];
+                trackerDir[src][lane] = frameDirections[lane];
+                trackerMs[src][lane] = now;
+                trackerSeen[src][lane] = true;
+            }
+            if (havePoolFrame[lane]) {
+                trackerPool[src][lane] = frameXmPool[lane];
+                trackerPoolSeen[src][lane] = true;
+                trackerMs[src][lane] = now;
+            }
+            final boolean fresh0 = trackerSeen[0][lane] && now - trackerMs[0][lane] < 300;
+            final boolean fresh1 = trackerSeen[1][lane] && now - trackerMs[1][lane] < 300;
+            if (fresh0 && fresh1) {
+                seenLane[lane] = true;
+                frameX[lane] = 0.5 * (trackerX[0][lane] + trackerX[1][lane]);
+                frameDirections[lane] = trackerDir[src][lane];
+            } else if (fresh0) {
+                seenLane[lane] = true;
+                frameX[lane] = trackerX[0][lane];
+                frameDirections[lane] = trackerDir[0][lane];
+            } else if (fresh1) {
+                seenLane[lane] = true;
+                frameX[lane] = trackerX[1][lane];
+                frameDirections[lane] = trackerDir[1][lane];
+            }
+            final boolean pool0 = fresh0 && trackerPoolSeen[0][lane];
+            final boolean pool1 = fresh1 && trackerPoolSeen[1][lane];
+            if (pool0 && pool1) {
+                havePoolFrame[lane] = true;
+                frameXmPool[lane] = 0.5 * (trackerPool[0][lane] + trackerPool[1][lane]);
+            } else if (pool0) {
+                havePoolFrame[lane] = true;
+                frameXmPool[lane] = trackerPool[0][lane];
+            } else if (pool1) {
+                havePoolFrame[lane] = true;
+                frameXmPool[lane] = trackerPool[1][lane];
+            }
+        }
+        applyTrackerVideoSample(TrackerVideoSample.fromParsed(
+                sample.source, sample.frameId == Long.MIN_VALUE ? null : sample.frameId,
+                sample.captureEpochMs == Long.MIN_VALUE ? null : sample.captureEpochMs,
+                sample.processingEpochMs == Long.MIN_VALUE ? null : sample.processingEpochMs,
+                sample.nominalPeriodMs > 0 ? sample.nominalPeriodMs : null,
+                sample.interpolated, seenLane, frameX, havePoolFrame, frameXmPool, frameDirections));
+    }
+
+    /**
+     * One ORAD distance pack per video {@code frame_id}.
+     * Dual-TCP / interpolated duplicates with the same id are dropped.
+     * Large downward jumps of frame_id are treated as tracker counter reset.
+     */
+    private void applyTrackerVideoSample(TrackerVideoSample sample) {
+        if (sample == null) {
+            return;
+        }
+        final long exportFrameId;
+        final long exportCaptureMs;
+        synchronized (videoFrameMergeLock) {
+            if (sample.frameId != Long.MIN_VALUE) {
+                if (sample.frameId == lastAppliedVideoFrameId) {
+                    return; // same video frame already exported
+                }
+                if (lastAppliedVideoFrameId != Long.MIN_VALUE
+                        && sample.frameId < lastAppliedVideoFrameId
+                        && (lastAppliedVideoFrameId - sample.frameId) < 1000L) {
+                    return; // out-of-order / stale frame_id
+                }
+                lastAppliedVideoFrameId = sample.frameId;
+                exportFrameId = sample.frameId;
+            } else if (sample.captureEpochMs != Long.MIN_VALUE) {
+                // Fallback when tracker omits frame_id.
+                if (sample.captureEpochMs == lastAppliedCaptureEpochMs) {
+                    return;
+                }
+                lastAppliedCaptureEpochMs = sample.captureEpochMs;
+                exportFrameId = Long.MIN_VALUE;
+            } else {
+                exportFrameId = Long.MIN_VALUE;
+            }
+            if (sample.captureEpochMs != Long.MIN_VALUE) {
+                lastAppliedCaptureEpochMs = sample.captureEpochMs;
+            }
+            exportCaptureMs = sample.captureEpochMs;
+        }
+
+        boolean[] seenLane = sample.seenLane;
+        double[] frameX = sample.frameX;
+        boolean[] havePoolFrame = sample.havePoolFrame;
+        double[] frameXmPool = sample.frameXmPool;
+        String[] frameDirections = sample.frameDirections;
+        // Pace ORAD by video frame, not by processing-completion wall clock.
+        long now = exportCaptureMs != Long.MIN_VALUE
+                ? exportCaptureMs
+                : (sample.processingEpochMs != Long.MIN_VALUE
+                ? sample.processingEpochMs
+                : System.currentTimeMillis());
 
         synchronized (splitsStateLock) {
             for (int lane = 0; lane < LANES_COUNT; lane++) {
@@ -2111,33 +2351,37 @@ public class RootLayoutController {
                 lastRankUpdateTs = now;
             }
 
-            // Send exports to RE (if connected).
+            // ORAD export is paced by video frame_id (one full distance pack per id).
+            // Dir/rank stay change-only; place-swimming Position_X runs after the pack.
             if (controller != null) {
+                logOradFrameTiming(exportFrameId, exportCaptureMs, sample.source);
                 for (int lane = 0; lane < LANES_COUNT; lane++) {
-                    String dir = toDisplayedDirection(lastDirection[lane]);
-                    if (dir == null) {
-                        dir = "";
-                    }
                     double displayDistance = toDisplayedDistance(lastTotalDistance[lane]);
                     String distValue = String.format(Locale.US, "%.3f", displayDistance);
-
-                    boolean needSendDist = !hasExportedDistance[lane]
+                    boolean needSendDist = DISTANCE_EXPORT_EPS <= 0.0
+                            || !hasExportedDistance[lane]
                             || Math.abs(displayDistance - lastExportedDistance[lane]) > DISTANCE_EXPORT_EPS;
-                    boolean needSendDir = lastExportedDirection[lane] == null ? !dir.isEmpty() : !lastExportedDirection[lane].equals(dir);
-
                     if (needSendDist) {
                         controller.sendSetExport(RE_SCENE, "distance_lane_" + lane, distValue);
                         lastExportedDistance[lane] = displayDistance;
                         hasExportedDistance[lane] = true;
                     }
-
+                }
+                for (int lane = 0; lane < LANES_COUNT; lane++) {
+                    String dir = toDisplayedDirection(lastDirection[lane]);
+                    if (dir == null) {
+                        dir = "";
+                    }
+                    boolean needSendDir = lastExportedDirection[lane] == null
+                            ? !dir.isEmpty()
+                            : !lastExportedDirection[lane].equals(dir);
                     if (needSendDir) {
                         controller.sendSetExport(RE_SCENE, "directin_lane_" + lane, dir);
                         lastExportedDirection[lane] = dir;
                     }
-
                     if (allowRankUpdate) {
-                        controller.sendSetExport(RE_SCENE, "position_lane_" + lane, String.valueOf(displayedRanks[lane]));
+                        controller.sendSetExport(RE_SCENE, "position_lane_" + lane,
+                                String.valueOf(displayedRanks[lane]));
                     }
                 }
                 if (leadersPlaceSwimmingTracking) {
@@ -2211,6 +2455,189 @@ public class RootLayoutController {
         }
     }
 
+    private void startVideoFrameMergeExecutor() {
+        stopVideoFrameMergeExecutor();
+        videoFrameMergeExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "tcp-video-frame-merge");
+            t.setDaemon(true);
+            return t;
+        });
+        synchronized (videoFrameMergeLock) {
+            trackerVideoSamples[0] = null;
+            trackerVideoSamples[1] = null;
+            cancelVideoFrameFlush(0);
+            cancelVideoFrameFlush(1);
+            lastAppliedVideoFrameId = Long.MIN_VALUE;
+            lastAppliedCaptureEpochMs = Long.MIN_VALUE;
+            lastOradLogFrameId = Long.MIN_VALUE;
+            lastOradLogCaptureMs = Long.MIN_VALUE;
+            lastOradLogWallMs = Long.MIN_VALUE;
+        }
+    }
+
+    private void stopVideoFrameMergeExecutor() {
+        synchronized (videoFrameMergeLock) {
+            cancelVideoFrameFlush(0);
+            cancelVideoFrameFlush(1);
+            trackerVideoSamples[0] = null;
+            trackerVideoSamples[1] = null;
+        }
+        ScheduledExecutorService exec = videoFrameMergeExecutor;
+        videoFrameMergeExecutor = null;
+        if (exec == null) {
+            return;
+        }
+        exec.shutdownNow();
+        try {
+            exec.awaitTermination(1, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void cancelVideoFrameFlush(int source) {
+        ScheduledFuture<?> f = trackerVideoFlushFutures[source];
+        trackerVideoFlushFutures[source] = null;
+        if (f != null) {
+            f.cancel(false);
+        }
+    }
+
+    private void scheduleVideoFrameFlush(int source, TrackerVideoSample sample) {
+        ScheduledExecutorService exec = videoFrameMergeExecutor;
+        if (exec == null || sample == null) {
+            applyTrackerVideoSample(sample);
+            return;
+        }
+        cancelVideoFrameFlush(source);
+        final long gen = trackerVideoFlushGeneration.incrementAndGet();
+        sample.flushGeneration = gen;
+        int period = sample.nominalPeriodMs > 0 ? sample.nominalPeriodMs : DEFAULT_VIDEO_FRAME_PERIOD_MS;
+        long waitMs = Math.max(5, Math.min(VIDEO_FRAME_MATCH_WAIT_MS, period / 2));
+        trackerVideoFlushFutures[source] = exec.schedule(() -> {
+            TrackerVideoSample toApply = null;
+            synchronized (videoFrameMergeLock) {
+                TrackerVideoSample pending = trackerVideoSamples[source];
+                if (pending == null || pending.flushGeneration != gen) {
+                    return;
+                }
+                trackerVideoSamples[source] = null;
+                trackerVideoFlushFutures[source] = null;
+                toApply = pending;
+            }
+            applyTrackerVideoSample(toApply);
+        }, waitMs, TimeUnit.MILLISECONDS);
+    }
+
+    private boolean videoFramesMatch(TrackerVideoSample a, TrackerVideoSample b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        if (a.frameId != Long.MIN_VALUE && b.frameId != Long.MIN_VALUE) {
+            return a.frameId == b.frameId;
+        }
+        if (a.captureEpochMs != Long.MIN_VALUE && b.captureEpochMs != Long.MIN_VALUE) {
+            int period = Math.max(
+                    a.nominalPeriodMs > 0 ? a.nominalPeriodMs : DEFAULT_VIDEO_FRAME_PERIOD_MS,
+                    b.nominalPeriodMs > 0 ? b.nominalPeriodMs : DEFAULT_VIDEO_FRAME_PERIOD_MS);
+            long tol = Math.max(5, period / 2);
+            return Math.abs(a.captureEpochMs - b.captureEpochMs) <= tol;
+        }
+        return false;
+    }
+
+    private TrackerVideoSample mergeVideoSamples(TrackerVideoSample a, TrackerVideoSample b) {
+        boolean[] seenLane = new boolean[LANES_COUNT];
+        double[] frameX = new double[LANES_COUNT];
+        boolean[] havePoolFrame = new boolean[LANES_COUNT];
+        double[] frameXmPool = new double[LANES_COUNT];
+        String[] frameDirections = new String[LANES_COUNT];
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            boolean aSeen = a.seenLane[lane];
+            boolean bSeen = b.seenLane[lane];
+            if (aSeen && bSeen) {
+                seenLane[lane] = true;
+                frameX[lane] = 0.5 * (a.frameX[lane] + b.frameX[lane]);
+                frameDirections[lane] = a.frameDirections[lane] != null
+                        ? a.frameDirections[lane] : b.frameDirections[lane];
+            } else if (aSeen) {
+                seenLane[lane] = true;
+                frameX[lane] = a.frameX[lane];
+                frameDirections[lane] = a.frameDirections[lane];
+            } else if (bSeen) {
+                seenLane[lane] = true;
+                frameX[lane] = b.frameX[lane];
+                frameDirections[lane] = b.frameDirections[lane];
+            }
+            boolean aPool = a.havePoolFrame[lane];
+            boolean bPool = b.havePoolFrame[lane];
+            if (aPool && bPool) {
+                havePoolFrame[lane] = true;
+                frameXmPool[lane] = 0.5 * (a.frameXmPool[lane] + b.frameXmPool[lane]);
+            } else if (aPool) {
+                havePoolFrame[lane] = true;
+                frameXmPool[lane] = a.frameXmPool[lane];
+            } else if (bPool) {
+                havePoolFrame[lane] = true;
+                frameXmPool[lane] = b.frameXmPool[lane];
+            }
+        }
+        Long frameId = a.frameId != Long.MIN_VALUE ? a.frameId
+                : (b.frameId != Long.MIN_VALUE ? b.frameId : null);
+        Long captureMs = a.captureEpochMs != Long.MIN_VALUE ? a.captureEpochMs
+                : (b.captureEpochMs != Long.MIN_VALUE ? b.captureEpochMs : null);
+        if (a.captureEpochMs != Long.MIN_VALUE && b.captureEpochMs != Long.MIN_VALUE) {
+            captureMs = (a.captureEpochMs + b.captureEpochMs) / 2;
+        }
+        Long procMs = a.processingEpochMs != Long.MIN_VALUE ? a.processingEpochMs
+                : (b.processingEpochMs != Long.MIN_VALUE ? b.processingEpochMs : null);
+        Integer period = a.nominalPeriodMs > 0 ? a.nominalPeriodMs
+                : (b.nominalPeriodMs > 0 ? b.nominalPeriodMs : null);
+        return TrackerVideoSample.fromParsed(
+                a.source, frameId, captureMs, procMs, period,
+                a.interpolated || b.interpolated,
+                seenLane, frameX, havePoolFrame, frameXmPool, frameDirections);
+    }
+
+    private Long extractLong(Pattern pattern, String input) {
+        Matcher m = pattern.matcher(input);
+        if (m.find()) {
+            try {
+                return Long.parseLong(m.group(1));
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Long parseIsoToEpochMs(String iso) {
+        if (iso == null || iso.isEmpty()) {
+            return null;
+        }
+        try {
+            return Instant.parse(iso).toEpochMilli();
+        } catch (DateTimeParseException ignored) {
+            // fall through
+        }
+        // Qt ISODateWithMs may omit zone — treat as UTC.
+        if (!iso.endsWith("Z") && !iso.contains("+") && !iso.matches(".*-\\d{2}:\\d{2}$")) {
+            try {
+                return Instant.parse(iso + "Z").toEpochMilli();
+            } catch (DateTimeParseException ignored) {
+                // fall through
+            }
+        }
+        try {
+            return LocalDateTime.parse(iso, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                    .atZone(ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli();
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
+    }
+
     private Integer extractInt(Pattern pattern, String input) {
         Matcher m = pattern.matcher(input);
         if (m.find()) return Integer.parseInt(m.group(1));
@@ -2227,6 +2654,48 @@ public class RootLayoutController {
         Matcher m = pattern.matcher(input);
         if (m.find()) return m.group(1);
         return null;
+    }
+
+    /** One tracker TCP JSON message keyed for video-frame merge. */
+    private static final class TrackerVideoSample {
+        int source;
+        long frameId = Long.MIN_VALUE;
+        long captureEpochMs = Long.MIN_VALUE;
+        long processingEpochMs = Long.MIN_VALUE;
+        int nominalPeriodMs;
+        boolean interpolated;
+        long flushGeneration;
+        final boolean[] seenLane = new boolean[LANES_COUNT];
+        final double[] frameX = new double[LANES_COUNT];
+        final boolean[] havePoolFrame = new boolean[LANES_COUNT];
+        final double[] frameXmPool = new double[LANES_COUNT];
+        final String[] frameDirections = new String[LANES_COUNT];
+
+        static TrackerVideoSample fromParsed(
+                int source, Long frameId, Long captureEpochMs, Long processingEpochMs,
+                Integer nominalPeriodMs, boolean interpolated,
+                boolean[] seenLane, double[] frameX, boolean[] havePoolFrame,
+                double[] frameXmPool, String[] frameDirections) {
+            TrackerVideoSample s = new TrackerVideoSample();
+            s.source = source;
+            if (frameId != null) {
+                s.frameId = frameId;
+            }
+            if (captureEpochMs != null) {
+                s.captureEpochMs = captureEpochMs;
+            }
+            if (processingEpochMs != null) {
+                s.processingEpochMs = processingEpochMs;
+            }
+            s.nominalPeriodMs = nominalPeriodMs != null ? nominalPeriodMs : 0;
+            s.interpolated = interpolated;
+            System.arraycopy(seenLane, 0, s.seenLane, 0, LANES_COUNT);
+            System.arraycopy(frameX, 0, s.frameX, 0, LANES_COUNT);
+            System.arraycopy(havePoolFrame, 0, s.havePoolFrame, 0, LANES_COUNT);
+            System.arraycopy(frameXmPool, 0, s.frameXmPool, 0, LANES_COUNT);
+            System.arraycopy(frameDirections, 0, s.frameDirections, 0, LANES_COUNT);
+            return s;
+        }
     }
 
 // Настройка размера бассейна
