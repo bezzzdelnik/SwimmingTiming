@@ -335,6 +335,11 @@
                                                                         <Tooltip text="Смещение Position_X в метрах (добавляется к x_m_pool)" />
                                                                     </tooltip>
                                                                 </TextField>
+                                                                <CheckBox fx:id="placeFromRawCheckBox" mnemonicParsing="false" text="МЕСТО ИЗ RAW">
+                                                                    <tooltip>
+                                                                        <Tooltip text="Включено: место и отставание считаются по x_m_raw из TCP JSON. 0 остаётся у той же стенки: чётный отрезок прибавляет x, нечётный — (длина бассейна − x). Координата стрелки по-прежнему x_m_pool." />
+                                                                    </tooltip>
+                                                                </CheckBox>
                                                                 <CheckBox fx:id="oradArrowSmoothCheckBox" mnemonicParsing="false" selected="true" text="СГЛАЖЕННЫЕ">
                                                                     <tooltip>
                                                                         <Tooltip text="Включено: стрелка рисуется по сглаженной координате. Выключено: по сырому x_m_pool из TCP JSON, до фильтра." />

@@ -123,6 +123,11 @@ public class RootLayoutController {
     private final boolean[] hasLastFilteredXmPool = new boolean[LANES_COUNT];
     /** true: стрелка по сглаженной координате. false: по сырому x_m_pool из JSON. */
     private volatile boolean oradArrowSmoothEnabled = true;
+    /** Пройденная дистанция для места и отставания, посчитанная из x_m_raw. */
+    private final double[] lastRawTotalDistance = new double[LANES_COUNT];
+    private final boolean[] hasLastRawTotalDistance = new boolean[LANES_COUNT];
+    /** true: место и отставание из x_m_raw. false: из сглаженного x_m. */
+    private volatile boolean placeFromRawEnabled = false;
     private final String[] lastDirection = new String[LANES_COUNT];
     private final int[] displayedRanks = new int[LANES_COUNT];
 
@@ -159,6 +164,7 @@ public class RootLayoutController {
     private final Pattern laneIdPattern = Pattern.compile("\"lane_id\":(\\d+)");
     private final Pattern xPattern = Pattern.compile("\"x_m\":([-0-9\\.Ee]+)");
     private final Pattern xPoolPattern = Pattern.compile("\"x_m_pool\":([-0-9\\.Ee]+)");
+    private final Pattern xRawPattern = Pattern.compile("\"x_m_raw\":([-0-9\\.Ee]+)");
     private final Pattern directionPattern = Pattern.compile("\"direction\":\"(left|right)\"");
     private final Pattern frameIdPattern = Pattern.compile("\"frame_id\":(-?\\d+)");
     private final Pattern captureTsPattern = Pattern.compile("\"capture_timestamp\":\"([^\"]+)\"");
@@ -211,6 +217,8 @@ public class RootLayoutController {
     private final long[][] trackerMs = new long[2][LANES_COUNT];
     private final boolean[][] trackerSeen = new boolean[2][LANES_COUNT];
     private final boolean[][] trackerPoolSeen = new boolean[2][LANES_COUNT];
+    private final double[][] trackerRaw = new double[2][LANES_COUNT];
+    private final boolean[][] trackerRawSeen = new boolean[2][LANES_COUNT];
     /** Dual-TCP merge by video frame (frame_id / capture_timestamp). */
     private final Object videoFrameMergeLock = new Object();
     private final TrackerVideoSample[] trackerVideoSamples = new TrackerVideoSample[2];
@@ -279,6 +287,8 @@ public class RootLayoutController {
     @FXML private CheckBox coordinateLogToFileCheckBox;
     /** Стрелка ORAD: сглаженная координата или сырой x_m_pool из TCP JSON. */
     @FXML private CheckBox oradArrowSmoothCheckBox;
+    /** Место и отставание: x_m_raw из TCP JSON или сглаженный x_m. */
+    @FXML private CheckBox placeFromRawCheckBox;
 
     private OradController oradConnectionController;
 
@@ -573,6 +583,20 @@ public class RootLayoutController {
                 refreshOradPlaceLeadersExportsIfTracking();
             });
         }
+        placeFromRawEnabled = Boolean.parseBoolean(
+                properties.getProperty("placeFromRaw", "false"));
+        if (placeFromRawCheckBox != null) {
+            placeFromRawCheckBox.setSelected(placeFromRawEnabled);
+            placeFromRawCheckBox.selectedProperty().addListener((o, p, n) -> {
+                placeFromRawEnabled = Boolean.TRUE.equals(n);
+                setProperties("placeFromRaw", String.valueOf(placeFromRawEnabled));
+                synchronized (splitsStateLock) {
+                    publishPlaceRanksNowLocked();
+                }
+                refreshOradPlaceLeadersExportsIfTracking();
+                updateSplitUiFromState();
+            });
+        }
         if (coordinateLogToFileCheckBox != null) {
             coordinateLogToFileCheckBox.setSelected(Boolean.parseBoolean(
                     properties.getProperty("coordinateLogToFile", "false")));
@@ -686,6 +710,7 @@ public class RootLayoutController {
             for (int lane = 0; lane < LANES_COUNT; lane++) {
                 trackerSeen[src][lane] = false;
                 trackerPoolSeen[src][lane] = false;
+                trackerRawSeen[src][lane] = false;
             }
         }
 
@@ -1505,8 +1530,8 @@ public class RootLayoutController {
         for (int lane = 0; lane < LANES_COUNT; lane++) idx[lane] = lane;
         Arrays.sort(idx, (a, b) -> {
             int cmp = Double.compare(
-                    toDisplayedDistance(lastTotalDistance[b]),
-                    toDisplayedDistance(lastTotalDistance[a]));
+                    displayedProgressForPlace(b),
+                    displayedProgressForPlace(a));
             if (cmp != 0) return cmp;
             return Integer.compare(a, b);
         });
@@ -1805,6 +1830,53 @@ public class RootLayoutController {
         }
     }
 
+    /**
+     * x_m и x_m_raw — позиция на текущем отрезке, 0 закреплён у одной стенки.
+     * Чётный отрезок: плывут от 0 к длине бассейна. Нечётный: от длины к 0,
+     * поэтому к уже пройденным длинам добавляется (длина − x), а не ещё одно зеркало.
+     */
+    private double totalDistanceFromSegment(int passedSplits, double xSeg) {
+        double segLen = swimPoolSize;
+        double segPos = Math.max(0, Math.min(segLen, xSeg));
+        double base = passedSplits * (double) segLen;
+        double total = (passedSplits % 2 == 0) ? (base + segPos) : (base + (segLen - segPos));
+        return Math.max(0, Math.min(distance, total));
+    }
+
+    /** Дистанция, по которой считаются место и отставание. */
+    private double progressForPlace(int lane) {
+        if (placeFromRawEnabled && hasLastRawTotalDistance[lane]) {
+            return lastRawTotalDistance[lane];
+        }
+        return lastTotalDistance[lane];
+    }
+
+    /**
+     * Для x_m_raw место берётся из накопленной дистанции как есть.
+     * Зеркало 50 м остаётся только у прежнего пути по сглаженному x_m.
+     */
+    private double displayedProgressForPlace(int lane) {
+        double progress = progressForPlace(lane);
+        if (placeFromRawEnabled && hasLastRawTotalDistance[lane]) {
+            return Math.max(0.0, Math.min(distance, progress));
+        }
+        return toDisplayedDistance(progress);
+    }
+
+    /** Сразу публикует место в таблицу и ORAD. Удерживать {@link #splitsStateLock}. */
+    private void publishPlaceRanksNowLocked() {
+        int[] newRanks = computeRanksByTotalDistance();
+        System.arraycopy(newRanks, 0, displayedRanks, 0, LANES_COUNT);
+        lastRankUpdateTs = System.currentTimeMillis();
+        if (controller == null) {
+            return;
+        }
+        for (int lane = 0; lane < LANES_COUNT; lane++) {
+            controller.sendSetExport(RE_SCENE, "position_lane_" + lane,
+                    String.valueOf(displayedRanks[lane]));
+        }
+    }
+
     private static int countFilledSplits(Participant p) {
         if (p == null) {
             return 0;
@@ -1894,8 +1966,8 @@ public class RootLayoutController {
         }
         Arrays.sort(idx, (a, b) -> {
             int cmp = Double.compare(
-                    toDisplayedDistance(lastTotalDistance[b]),
-                    toDisplayedDistance(lastTotalDistance[a]));
+                    displayedProgressForPlace(b),
+                    displayedProgressForPlace(a));
             if (cmp != 0) {
                 return cmp;
             }
@@ -1923,7 +1995,7 @@ public class RootLayoutController {
 
         int[] top4 = computeTopFourLanesByDistanceLocked();
         int leaderLane = top4[0];
-        double leaderDist = toDisplayedDistance(lastTotalDistance[leaderLane]);
+        double leaderDist = displayedProgressForPlace(leaderLane);
         boolean[] inTop4 = new boolean[LANES_COUNT];
         for (int lane : top4) {
             inTop4[lane] = true;
@@ -1960,7 +2032,7 @@ public class RootLayoutController {
                 }
 
                 String delay = (srcLane == leaderLane) ? "ЛИДЕР"
-                        : formatGapBehindLeaderRu(leaderDist - toDisplayedDistance(lastTotalDistance[srcLane]));
+                        : formatGapBehindLeaderRu(leaderDist - displayedProgressForPlace(srcLane));
                 String child = oradChildIndexFromSplitsForLane(srcLane, reverseLeadersDir);
                 if (forceResend || !delay.equals(lastPlashDelaySent[oradSlot])) {
                     controller.sendSetExport(PLACE_SWIMMING_SCENE,
@@ -2039,7 +2111,7 @@ public class RootLayoutController {
 
             double leaderDist = 0;
             for (int l = 0; l < LANES_COUNT; l++) {
-                leaderDist = Math.max(leaderDist, toDisplayedDistance(lastTotalDistance[l]));
+                leaderDist = Math.max(leaderDist, displayedProgressForPlace(l));
             }
             int[] ranks = computeRanksByTotalDistance();
 
@@ -2074,7 +2146,7 @@ public class RootLayoutController {
                 }
                 sb.append("]");
                 double displayDistance = toDisplayedDistance(lastTotalDistance[lane]);
-                double gp = leaderDist - displayDistance;
+                double gp = leaderDist - displayedProgressForPlace(lane);
                 sb.append(",\"line_pos\":").append(ranks[lane])
                         .append(",\"line_real_x\":")
                         .append(String.format(Locale.US, "%.2f", displayDistance))
@@ -2099,6 +2171,8 @@ public class RootLayoutController {
         double[] frameX = new double[LANES_COUNT];
         boolean[] havePoolFrame = new boolean[LANES_COUNT];
         double[] frameXmPool = new double[LANES_COUNT];
+        boolean[] haveRawFrame = new boolean[LANES_COUNT];
+        double[] frameXmRaw = new double[LANES_COUNT];
         String[] frameDirections = new String[LANES_COUNT];
 
         Long frameId = extractLong(frameIdPattern, cleaned);
@@ -2127,10 +2201,15 @@ public class RootLayoutController {
                         Integer laneId = extractInt(laneIdPattern, swimmerObj);
                         Double xVal = extractDouble(xPattern, swimmerObj);
                         Double xPool = extractDouble(xPoolPattern, swimmerObj);
+                        Double xRaw = extractDouble(xRawPattern, swimmerObj);
 
                         if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xPool != null) {
                             havePoolFrame[laneId] = true;
                             frameXmPool[laneId] = xPool;
+                        }
+                        if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xRaw != null) {
+                            haveRawFrame[laneId] = true;
+                            frameXmRaw[laneId] = xRaw;
                         }
                         if (laneId != null && laneId >= 0 && laneId < LANES_COUNT && xVal != null) {
                             seenLane[laneId] = true;
@@ -2153,7 +2232,7 @@ public class RootLayoutController {
 
         TrackerVideoSample sample = TrackerVideoSample.fromParsed(
                 source, frameId, captureEpochMs, processingEpochMs, nominalPeriodMs, interpolated,
-                seenLane, frameX, havePoolFrame, frameXmPool, frameDirections);
+                seenLane, frameX, havePoolFrame, frameXmPool, haveRawFrame, frameXmRaw, frameDirections);
         ingestTrackerVideoSample(sample);
     }
 
@@ -2199,6 +2278,8 @@ public class RootLayoutController {
         double[] frameX = sample.frameX.clone();
         boolean[] havePoolFrame = sample.havePoolFrame.clone();
         double[] frameXmPool = sample.frameXmPool.clone();
+        boolean[] haveRawFrame = sample.haveRaw.clone();
+        double[] frameXmRaw = sample.frameXmRaw.clone();
         String[] frameDirections = sample.frameDirections.clone();
         long now = System.currentTimeMillis();
         final int src = sample.source == 1 ? 1 : 0;
@@ -2212,6 +2293,11 @@ public class RootLayoutController {
             if (havePoolFrame[lane]) {
                 trackerPool[src][lane] = frameXmPool[lane];
                 trackerPoolSeen[src][lane] = true;
+                trackerMs[src][lane] = now;
+            }
+            if (haveRawFrame[lane]) {
+                trackerRaw[src][lane] = frameXmRaw[lane];
+                trackerRawSeen[src][lane] = true;
                 trackerMs[src][lane] = now;
             }
             final boolean fresh0 = trackerSeen[0][lane] && now - trackerMs[0][lane] < 300;
@@ -2241,13 +2327,26 @@ public class RootLayoutController {
                 havePoolFrame[lane] = true;
                 frameXmPool[lane] = trackerPool[1][lane];
             }
+            final boolean raw0 = fresh0 && trackerRawSeen[0][lane];
+            final boolean raw1 = fresh1 && trackerRawSeen[1][lane];
+            if (raw0 && raw1) {
+                haveRawFrame[lane] = true;
+                frameXmRaw[lane] = 0.5 * (trackerRaw[0][lane] + trackerRaw[1][lane]);
+            } else if (raw0) {
+                haveRawFrame[lane] = true;
+                frameXmRaw[lane] = trackerRaw[0][lane];
+            } else if (raw1) {
+                haveRawFrame[lane] = true;
+                frameXmRaw[lane] = trackerRaw[1][lane];
+            }
         }
         applyTrackerVideoSample(TrackerVideoSample.fromParsed(
                 sample.source, sample.frameId == Long.MIN_VALUE ? null : sample.frameId,
                 sample.captureEpochMs == Long.MIN_VALUE ? null : sample.captureEpochMs,
                 sample.processingEpochMs == Long.MIN_VALUE ? null : sample.processingEpochMs,
                 sample.nominalPeriodMs > 0 ? sample.nominalPeriodMs : null,
-                sample.interpolated, seenLane, frameX, havePoolFrame, frameXmPool, frameDirections));
+                sample.interpolated, seenLane, frameX, havePoolFrame, frameXmPool,
+                haveRawFrame, frameXmRaw, frameDirections));
     }
 
     /**
@@ -2293,6 +2392,8 @@ public class RootLayoutController {
         double[] frameX = sample.frameX;
         boolean[] havePoolFrame = sample.havePoolFrame;
         double[] frameXmPool = sample.frameXmPool;
+        boolean[] haveRaw = sample.haveRaw;
+        double[] frameXmRaw = sample.frameXmRaw;
         String[] frameDirections = sample.frameDirections;
         // Pace ORAD by video frame, not by processing-completion wall clock.
         long now = exportCaptureMs != Long.MIN_VALUE
@@ -2356,17 +2457,15 @@ public class RootLayoutController {
                     }
                 }
 
-                // x_m интерпретируем как позицию внутри текущего отрезка бассейна [0..poolLength].
-                double segLen = swimPoolSize;
-                double segPos = Math.max(0, Math.min(segLen, xSeg));
-
-                // Если количество сплитов чётное (включая 0) — считаем "по ходу" x_m.
-                // Если нечётное — пловец уже на обратном отрезке, поэтому добавляем (poolLen - x_m).
-                double base = passedSplits * segLen;
-                double total = (passedSplits % 2 == 0) ? (base + segPos) : (base + (segLen - segPos));
-
-                total = Math.max(0, Math.min(distance, total)); // avoid overshoot outside selected race distance
-                lastTotalDistance[lane] = total;
+                lastTotalDistance[lane] = totalDistanceFromSegment(passedSplits, xSeg);
+            }
+            for (int lane = 0; lane < LANES_COUNT; lane++) {
+                if (!haveRaw[lane]) {
+                    continue;
+                }
+                Participant p = participants.size() > lane ? participants.get(lane) : null;
+                lastRawTotalDistance[lane] = totalDistanceFromSegment(countFilledSplits(p), frameXmRaw[lane]);
+                hasLastRawTotalDistance[lane] = true;
             }
 
             int[] newRanks = computeRanksByTotalDistance();
@@ -2466,7 +2565,7 @@ public class RootLayoutController {
         synchronized (splitsStateLock) {
             double leaderDist = 0;
             for (int lane = 0; lane < LANES_COUNT; lane++) {
-                leaderDist = Math.max(leaderDist, toDisplayedDistance(lastTotalDistance[lane]));
+                leaderDist = Math.max(leaderDist, displayedProgressForPlace(lane));
             }
             for (int lane = 0; lane < LANES_COUNT; lane++) {
                 if (positionLabels[lane] != null) {
@@ -2478,7 +2577,7 @@ public class RootLayoutController {
                             toDisplayedDistance(lastTotalDistance[lane])));
                 }
                 if (gpLabels[lane] != null) {
-                    double gp = leaderDist - toDisplayedDistance(lastTotalDistance[lane]);
+                    double gp = leaderDist - displayedProgressForPlace(lane);
                     gpLabels[lane].setText(String.format(Locale.US, "%.2f", gp));
                 }
                 if (directionLabels[lane] != null) {
@@ -2585,6 +2684,8 @@ public class RootLayoutController {
         double[] frameX = new double[LANES_COUNT];
         boolean[] havePoolFrame = new boolean[LANES_COUNT];
         double[] frameXmPool = new double[LANES_COUNT];
+        boolean[] haveRawFrame = new boolean[LANES_COUNT];
+        double[] frameXmRaw = new double[LANES_COUNT];
         String[] frameDirections = new String[LANES_COUNT];
         for (int lane = 0; lane < LANES_COUNT; lane++) {
             boolean aSeen = a.seenLane[lane];
@@ -2615,6 +2716,18 @@ public class RootLayoutController {
                 havePoolFrame[lane] = true;
                 frameXmPool[lane] = b.frameXmPool[lane];
             }
+            boolean aRaw = a.haveRaw[lane];
+            boolean bRaw = b.haveRaw[lane];
+            if (aRaw && bRaw) {
+                haveRawFrame[lane] = true;
+                frameXmRaw[lane] = 0.5 * (a.frameXmRaw[lane] + b.frameXmRaw[lane]);
+            } else if (aRaw) {
+                haveRawFrame[lane] = true;
+                frameXmRaw[lane] = a.frameXmRaw[lane];
+            } else if (bRaw) {
+                haveRawFrame[lane] = true;
+                frameXmRaw[lane] = b.frameXmRaw[lane];
+            }
         }
         Long frameId = a.frameId != Long.MIN_VALUE ? a.frameId
                 : (b.frameId != Long.MIN_VALUE ? b.frameId : null);
@@ -2630,7 +2743,7 @@ public class RootLayoutController {
         return TrackerVideoSample.fromParsed(
                 a.source, frameId, captureMs, procMs, period,
                 a.interpolated || b.interpolated,
-                seenLane, frameX, havePoolFrame, frameXmPool, frameDirections);
+                seenLane, frameX, havePoolFrame, frameXmPool, haveRawFrame, frameXmRaw, frameDirections);
     }
 
     private Long extractLong(Pattern pattern, String input) {
@@ -2703,13 +2816,16 @@ public class RootLayoutController {
         final double[] frameX = new double[LANES_COUNT];
         final boolean[] havePoolFrame = new boolean[LANES_COUNT];
         final double[] frameXmPool = new double[LANES_COUNT];
+        final boolean[] haveRaw = new boolean[LANES_COUNT];
+        final double[] frameXmRaw = new double[LANES_COUNT];
         final String[] frameDirections = new String[LANES_COUNT];
 
         static TrackerVideoSample fromParsed(
                 int source, Long frameId, Long captureEpochMs, Long processingEpochMs,
                 Integer nominalPeriodMs, boolean interpolated,
                 boolean[] seenLane, double[] frameX, boolean[] havePoolFrame,
-                double[] frameXmPool, String[] frameDirections) {
+                double[] frameXmPool, boolean[] haveRaw, double[] frameXmRaw,
+                String[] frameDirections) {
             TrackerVideoSample s = new TrackerVideoSample();
             s.source = source;
             if (frameId != null) {
@@ -2727,6 +2843,8 @@ public class RootLayoutController {
             System.arraycopy(frameX, 0, s.frameX, 0, LANES_COUNT);
             System.arraycopy(havePoolFrame, 0, s.havePoolFrame, 0, LANES_COUNT);
             System.arraycopy(frameXmPool, 0, s.frameXmPool, 0, LANES_COUNT);
+            System.arraycopy(haveRaw, 0, s.haveRaw, 0, LANES_COUNT);
+            System.arraycopy(frameXmRaw, 0, s.frameXmRaw, 0, LANES_COUNT);
             System.arraycopy(frameDirections, 0, s.frameDirections, 0, LANES_COUNT);
             return s;
         }
@@ -2772,6 +2890,8 @@ public class RootLayoutController {
                 hasLastTcpXmPoolForOrad[lane] = false;
                 lastFilteredXmPool[lane] = 0;
                 hasLastFilteredXmPool[lane] = false;
+                lastRawTotalDistance[lane] = 0;
+                hasLastRawTotalDistance[lane] = false;
                 lastDirection[lane] = null;
                 smoothSegReady[lane] = false;
                 smoothPoolReady[lane] = false;
@@ -3015,6 +3135,7 @@ public class RootLayoutController {
         properties.setProperty("oradPosXOffset", "0");
         properties.setProperty("coordinateLogToFile", "false");
         properties.setProperty("oradArrowSmooth", "true");
+        properties.setProperty("placeFromRaw", "false");
     }
 
     private void applyLoadedPropertiesToUi() {
