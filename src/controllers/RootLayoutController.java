@@ -1805,6 +1805,11 @@ public class RootLayoutController {
         return distance == 50;
     }
 
+    /** Стрелки left/right переворачиваются только на дистанции 50 м в бассейне 50 м. */
+    private boolean isArrowDirectionInverted() {
+        return distance == 50 && swimPoolSize == 50;
+    }
+
     private double toDisplayedDistance(double progressDistance) {
         double clamped = Math.max(0.0, Math.min(distance, progressDistance));
         if (!isDistanceDisplayInverted()) {
@@ -1817,7 +1822,7 @@ public class RootLayoutController {
     }
 
     private String toDisplayedDirection(String direction) {
-        if (!isDistanceDisplayInverted() || direction == null) {
+        if (!isArrowDirectionInverted() || direction == null) {
             return direction;
         }
         if ("left".equals(direction)) {
@@ -1831,12 +1836,13 @@ public class RootLayoutController {
 
     /**
      * Направление плашки в ORAD: 0 и чётное число заполненных сплитов — left (1),
-     * нечётное — right (2). «РЕВЕРС ЛИДЕРОВ» инвертирует.
+     * нечётное — right (2). На 50 м в бассейне 50 м направление обратное.
+     * «РЕВЕРС ЛИДЕРОВ» инвертирует.
      */
     private String oradChildIndexFromSplitsForLane(int lane, boolean reverseLeadersDir) {
         int n = countFilledSplits(participants.size() > lane ? participants.get(lane) : null);
         boolean left = (n % 2 == 0);
-        if (isDistanceDisplayInverted()) {
+        if (isArrowDirectionInverted()) {
             left = !left;
         }
         if (reverseLeadersDir) {
