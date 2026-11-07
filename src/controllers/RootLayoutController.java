@@ -115,9 +115,14 @@ public class RootLayoutController {
     private final double[] lastTotalDistance = new double[LANES_COUNT];
     private final double[] lastJsonXSegment = new double[LANES_COUNT];
     private final boolean[] hasLastJsonXSegment = new boolean[LANES_COUNT];
-    /** Только ORAD Place_swimming Position_X — сырое x_m_pool из того же swimmer JSON. */
+    /** Сырой x_m_pool из TCP JSON, вход фильтра. */
     private final double[] lastTcpXmPoolForOrad = new double[LANES_COUNT];
     private final boolean[] hasLastTcpXmPoolForOrad = new boolean[LANES_COUNT];
+    /** x_m_pool после сглаживания внутри программы. */
+    private final double[] lastFilteredXmPool = new double[LANES_COUNT];
+    private final boolean[] hasLastFilteredXmPool = new boolean[LANES_COUNT];
+    /** true: стрелка по сглаженной координате. false: по сырому x_m_pool из JSON. */
+    private volatile boolean oradArrowSmoothEnabled = true;
     private final String[] lastDirection = new String[LANES_COUNT];
     private final int[] displayedRanks = new int[LANES_COUNT];
 
@@ -272,6 +277,8 @@ public class RootLayoutController {
     @FXML private ComboBox<String> oradPosXModeComboBox;
     /** Писать лог TCP/ORAD координат в файл рядом с приложением. */
     @FXML private CheckBox coordinateLogToFileCheckBox;
+    /** Стрелка ORAD: сглаженная координата или сырой x_m_pool из TCP JSON. */
+    @FXML private CheckBox oradArrowSmoothCheckBox;
 
     private OradController oradConnectionController;
 
@@ -554,6 +561,16 @@ public class RootLayoutController {
                 String newMode = uiLabelToPosXMode(n);
                 setProperties("oradPositionXMode", newMode);
                 startPlaceSwimmingPosExportScheduler();
+            });
+        }
+        oradArrowSmoothEnabled = Boolean.parseBoolean(
+                properties.getProperty("oradArrowSmooth", "true"));
+        if (oradArrowSmoothCheckBox != null) {
+            oradArrowSmoothCheckBox.setSelected(oradArrowSmoothEnabled);
+            oradArrowSmoothCheckBox.selectedProperty().addListener((o, p, n) -> {
+                oradArrowSmoothEnabled = Boolean.TRUE.equals(n);
+                setProperties("oradArrowSmooth", String.valueOf(oradArrowSmoothEnabled));
+                refreshOradPlaceLeadersExportsIfTracking();
             });
         }
         if (coordinateLogToFileCheckBox != null) {
@@ -1851,6 +1868,14 @@ public class RootLayoutController {
         return left ? "1" : "2";
     }
 
+    /** Координата стрелки: сглаженный x_m_pool или сырой вход фильтра. */
+    private double arrowCoordinateForOrad(int lane) {
+        if (oradArrowSmoothEnabled && hasLastFilteredXmPool[lane]) {
+            return lastFilteredXmPool[lane];
+        }
+        return hasLastTcpXmPoolForOrad[lane] ? lastTcpXmPoolForOrad[lane] : 0.0;
+    }
+
     /** Слот экспорта ORAD 0..9 → индекс дорожки-источника данных. */
     private int mapOradSlotToSourceLane(int oradSlot, boolean reverseLanes) {
         return reverseLanes ? (LANES_COUNT - 1 - oradSlot) : oradSlot;
@@ -1916,8 +1941,7 @@ public class RootLayoutController {
             }
 
             if (forceResend && !isPosXModeRawDuplicate10ms()) {
-                double posX = hasLastTcpXmPoolForOrad[srcLane] ? lastTcpXmPoolForOrad[srcLane] : 0.0;
-                queuePlaceSwimmingPosXExportLocked(oradSlot, posX, true);
+                queuePlaceSwimmingPosXExportLocked(oradSlot, arrowCoordinateForOrad(srcLane), true);
             }
 
             if (inTop4[srcLane]) {
@@ -2277,10 +2301,11 @@ public class RootLayoutController {
                 ? sample.processingEpochMs
                 : System.currentTimeMillis());
 
+        double[] jsonPool = Arrays.copyOf(frameXmPool, LANES_COUNT);
         synchronized (splitsStateLock) {
             for (int lane = 0; lane < LANES_COUNT; lane++) {
                 if (havePoolFrame[lane]) {
-                    lastTcpXmPoolForOrad[lane] = frameXmPool[lane];
+                    lastTcpXmPoolForOrad[lane] = jsonPool[lane];
                     hasLastTcpXmPoolForOrad[lane] = true;
                 }
             }
@@ -2291,12 +2316,15 @@ public class RootLayoutController {
                             smoothSegX, smoothSegVel, smoothSegMs, smoothSegReady);
                 }
                 if (havePoolFrame[lane]) {
-                    frameXmPool[lane] = smoothSwimmerAxis(lane, frameXmPool[lane], poolAxis,
+                    frameXmPool[lane] = smoothSwimmerAxis(lane, jsonPool[lane], poolAxis,
                             smoothPoolX, smoothPoolVel, smoothPoolMs, smoothPoolReady);
+                    lastFilteredXmPool[lane] = frameXmPool[lane];
+                    hasLastFilteredXmPool[lane] = true;
                 }
             }
-            sendPlaceSwimmingPosXRawFromTcpLocked(havePoolFrame, frameXmPool);
-            queuePlaceSwimmingPosXFromTcpFrameLocked(havePoolFrame, frameXmPool);
+            double[] arrowPool = oradArrowSmoothEnabled ? frameXmPool : jsonPool;
+            sendPlaceSwimmingPosXRawFromTcpLocked(havePoolFrame, arrowPool);
+            queuePlaceSwimmingPosXFromTcpFrameLocked(havePoolFrame, arrowPool);
 
             // Update state for lanes present in this frame (дистанция и UI по x_m).
             for (int lane = 0; lane < LANES_COUNT; lane++) {
@@ -2742,6 +2770,8 @@ public class RootLayoutController {
                 hasLastJsonXSegment[lane] = false;
                 lastTcpXmPoolForOrad[lane] = 0;
                 hasLastTcpXmPoolForOrad[lane] = false;
+                lastFilteredXmPool[lane] = 0;
+                hasLastFilteredXmPool[lane] = false;
                 lastDirection[lane] = null;
                 smoothSegReady[lane] = false;
                 smoothPoolReady[lane] = false;
@@ -2984,6 +3014,7 @@ public class RootLayoutController {
         properties.setProperty("oradPosXOffsetEnabled", "false");
         properties.setProperty("oradPosXOffset", "0");
         properties.setProperty("coordinateLogToFile", "false");
+        properties.setProperty("oradArrowSmooth", "true");
     }
 
     private void applyLoadedPropertiesToUi() {

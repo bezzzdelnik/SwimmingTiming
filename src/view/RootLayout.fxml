@@ -335,6 +335,11 @@
                                                                         <Tooltip text="Смещение Position_X в метрах (добавляется к x_m_pool)" />
                                                                     </tooltip>
                                                                 </TextField>
+                                                                <CheckBox fx:id="oradArrowSmoothCheckBox" mnemonicParsing="false" selected="true" text="СГЛАЖЕННЫЕ">
+                                                                    <tooltip>
+                                                                        <Tooltip text="Включено: стрелка рисуется по сглаженной координате. Выключено: по сырому x_m_pool из TCP JSON, до фильтра." />
+                                                                    </tooltip>
+                                                                </CheckBox>
                                                                 <CheckBox fx:id="coordinateLogToFileCheckBox" mnemonicParsing="false" text="ЛОГ КООРДИНАТ">
                                                                     <tooltip>
                                                                         <Tooltip text="Писать TCP и ORAD координаты в файл coordinates-*.log рядом с приложением" />
